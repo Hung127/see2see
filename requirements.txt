@@ -1,0 +1,10 @@
+# Engine
+numpy>=1.26
+PyYAML>=6.0
+# Visualization: pygame-ce is the maintained, API-compatible fork of pygame and is the
+# only one with a Python 3.14 wheel on this machine. `import pygame` is unchanged.
+pygame-ce>=2.5
+# Reporting
+matplotlib>=3.8
+# Tests
+pytest>=8.0
