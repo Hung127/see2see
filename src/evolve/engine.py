@@ -23,8 +23,9 @@ import numpy as np
 
 from .actions import Actions, decode
 from .brain import N_PARAMS, forward
+from .carcasses import Carcasses
 from .config import Config
-from .energy import Ledger, assimilation, basal_cost, metabolic_cost
+from .energy import Ledger, assimilation, basal_cost, metabolic_cost, strike_damage
 from .fields import Fields
 from .genome import N_TRAITS, crossover, founders, mutate, phenotype
 from .organisms import Population
@@ -49,6 +50,9 @@ class Engine:
         self.fields.step(0)
         self.population = Population(config.organisms)
         self.plants = Plants(config.plants, config.world)
+        self.carcasses = Carcasses()
+        # victim organism id -> [(attacker id, credited damage), ...] (max 8)
+        self._damage_credit: dict[int, list[tuple[int, float]]] = {}
         self.ledger = Ledger()
         self.detritus = 0.0
         self.tick = 0
@@ -81,18 +85,20 @@ class Engine:
 
     # -- stocks ---------------------------------------------------------------
     def mass_stock(self) -> float:
-        """Organic mass: organisms (body + reserves), plants, detritus."""
+        """Organic mass: organisms (body + reserves), plants, carcasses, detritus."""
         pop = self.population
         idx = np.flatnonzero(pop.alive)
         return float(pop.body[idx].sum() + pop.energy[idx].sum()
-                     + self.plants.total_biomass() + self.detritus)
+                     + self.plants.total_biomass() + self.carcasses.total_biomass()
+                     + self.detritus)
 
     def energy_stock(self) -> float:
         """Chemical energy: living tissue and reserves carry 1:1, detritus too."""
         pop = self.population
         idx = np.flatnonzero(pop.alive)
         return float(pop.body[idx].sum() + pop.energy[idx].sum()
-                     + self.plants.total_biomass() + self.detritus)
+                     + self.plants.total_biomass() + self.carcasses.total_biomass()
+                     + self.detritus)
 
     # -- tick -----------------------------------------------------------------
     def step(self) -> None:
@@ -105,12 +111,14 @@ class Engine:
         if actions is not None and self.population.n_alive:
             self._move(actions)                   # 8
             self._feed(actions)                   # 9
+            self._predation(actions)              # 10
             self._metabolise()                    # 11
             self._reproduce(actions)              # 12
             self._mortality()                     # 13
         self._decompose()                         # 14
         self.population.compact()
         self.plants.remove_dead()
+        self.carcasses.remove_dead()
         self._update_density_fields()             # 16 (density fields for viz)
 
     def run(self, ticks: int) -> None:
@@ -124,11 +132,22 @@ class Engine:
         self.detritus += self.plants.senesce()
 
     # -- stages 4-7: sense, think, decode -------------------------------------
+    def _refresh_phen(self) -> np.ndarray:
+        """Phenotype cache for the current dense slot set.
+
+        The pipeline refreshes it in ``_think``; direct stage calls (tests,
+        scripted experiments) may arrive with a stale cache after births.
+        """
+        if self._phen.shape[0] != self.population.alive.size:
+            self._phen = phenotype(self.population.genome)
+        return self._phen
+
     def _think(self) -> Actions | None:
         if self.population.n_alive == 0:
             return None
         self.last_sensors = collect(self.population, self.plants, self.fields,
-                                    self.world, self.cfg.organisms, grid=None)
+                                    self.world, self.cfg.organisms,
+                                    carcasses=self.carcasses, grid=None)
         weights = self.population.genome[:, N_TRAITS:]
         self.last_outputs = forward(self.last_sensors, weights)
         self._phen = phenotype(self.population.genome)
@@ -150,38 +169,55 @@ class Engine:
 
     # -- stage 9: feeding -----------------------------------------------------
     def _feed(self, actions: Actions) -> None:
+        """One bite per eater at the nearest plant *or* carcass within reach.
+
+        Contact, not vision, decides what can be bitten (DESIGN §6.3). Both
+        resources compete for the same reach, so a carcass can block a plant and
+        vice versa; the nearest wins, ties broken by resource kind then ID.
+        """
         eaters = np.flatnonzero(actions.eat)
-        p_idx = np.flatnonzero(self.plants.alive)
-        if eaters.size == 0 or p_idx.size == 0:
+        if eaters.size == 0:
             return
         pop = self.population
-        phen = self._phen
+        phen = self._refresh_phen()
         mass = phen[:, 0]
         emax = 10.0 * mass ** 0.9
         bite_rate = self.cfg.energy.bite * mass ** 0.75
         reach = 1.5 * mass ** (1.0 / 3.0) + 2.0
 
+        p_idx = np.flatnonzero(self.plants.alive)
+        c_idx = np.flatnonzero(self.carcasses.alive)
+        if p_idx.size + c_idx.size == 0:
+            return
+        rx = np.concatenate([self.plants.x[p_idx], self.carcasses.x[c_idx]])
+        ry = np.concatenate([self.plants.y[p_idx], self.carcasses.y[c_idx]])
+        # 0 = plant, 1 = carcass; keeps the two ID spaces apart in tie-breaks.
+        kind = np.concatenate([np.zeros(p_idx.size, dtype=np.int8),
+                               np.ones(c_idx.size, dtype=np.int8)])
+        slot = np.concatenate([p_idx, c_idx])
+        rid = np.concatenate([self.plants.id[p_idx], self.carcasses.id[c_idx]])
+        supply = np.concatenate([self.plants.biomass[p_idx],
+                                 self.carcasses.biomass[c_idx]])
+
         grid = SpatialGrid(self.world, cell=80.0)
-        grid.build(self.plants.x[p_idx], self.plants.y[p_idx])
+        grid.build(rx, ry)
         rep, tgt, dist = grid.candidates(pop.x, pop.y, radius_cells=2)
         keep = actions.eat[rep] & (dist <= reach[rep])
         rep, tgt, dist = rep[keep], tgt[keep], dist[keep]
         if rep.size == 0:
             return
 
-        # Nearest plant per eater, ties by lowest plant ID.
-        plant_slot = p_idx[tgt]
-        plant_id = self.plants.id[plant_slot]
-        order = np.lexsort((plant_id, dist, rep))
-        rep, plant_slot = rep[order], plant_slot[order]
+        # Nearest resource per eater; ties by (kind, resource ID).
+        order = np.lexsort((rid[tgt], kind[tgt], dist, rep))
+        rep, tgt, dist = rep[order], tgt[order], dist[order]
         first = np.ones(rep.size, dtype=bool)
         first[1:] = rep[1:] != rep[:-1]
         rows = rep[first]
-        target = plant_slot[first]
+        target = tgt[first]
 
         demand = np.minimum.reduce([
             bite_rate[rows],
-            self.plants.biomass[target],
+            supply[target],
             np.maximum(emax[rows] - pop.energy[rows], 0.0),
         ])
         active = demand > 0.0
@@ -189,42 +225,160 @@ class Engine:
         if rows.size == 0:
             return
 
-        # Contested plants: proportional shares, exact remainder to lowest eater ID.
-        total = np.bincount(target, weights=demand, minlength=self.plants.alive.size)
-        supply = self.plants.biomass
+        # Contested resources: proportional shares, exact remainder to the
+        # lowest eater ID, so the resource stock closes to rtol 1e-9.
+        total = np.bincount(target, weights=demand, minlength=rx.size)
         limited = total > supply
         scale = np.ones(rows.size)
         limited_rows = limited[target]
         if np.any(limited_rows):
             scale[limited_rows] = supply[target[limited_rows]] / total[target[limited_rows]]
         alloc = demand * scale
-        alloc_by_plant = np.bincount(target, weights=alloc,
-                                     minlength=self.plants.alive.size)
-        residual = np.where(limited, supply - alloc_by_plant, 0.0)
+        alloc_by_res = np.bincount(target, weights=alloc, minlength=rx.size)
+        residual = np.where(limited, supply - alloc_by_res, 0.0)
         if np.any(limited):
-            plant_order = np.argsort(target, kind="stable")
-            sorted_target = target[plant_order]
-            first_in_plant = np.ones(sorted_target.size, dtype=bool)
-            first_in_plant[1:] = sorted_target[1:] != sorted_target[:-1]
-            lowest = plant_order[first_in_plant]
+            res_order = np.argsort(target, kind="stable")
+            sorted_target = target[res_order]
+            first_in_res = np.ones(sorted_target.size, dtype=bool)
+            first_in_res[1:] = sorted_target[1:] != sorted_target[:-1]
+            lowest = res_order[first_in_res]
             alloc[lowest] += residual[target[lowest]]
 
-        eta = assimilation(self.cfg.energy.eta_p, phen[rows, 9], phen[rows, 4], plant=True)
+        is_plant = kind[target] == 0
+        eta = np.empty(rows.size)
+        eta[is_plant] = assimilation(self.cfg.energy.eta_p, phen[rows[is_plant], 9],
+                                     phen[rows[is_plant], 4], plant=True)
+        eta[~is_plant] = assimilation(self.cfg.energy.eta_m, phen[rows[~is_plant], 9],
+                                      phen[rows[~is_plant], 4], plant=False)
         gain = eta * alloc
         undigested = alloc - gain
         pop.energy[rows] += gain
-        # `target` may repeat (several eaters on one plant), so accumulate with
-        # bincount: fancy-index `-=` would apply only the last write per plant.
-        taken_by_plant = np.bincount(target, weights=alloc,
-                                     minlength=self.plants.alive.size)
-        self.plants.biomass -= taken_by_plant
         self.detritus += float(undigested.sum())
-        pop.plant_intake[rows] += alloc
+
+        # `target` may repeat (several eaters on one resource), so accumulate
+        # with bincount: fancy-index `-=` would apply only the last write.
+        taken = np.bincount(target, weights=alloc, minlength=rx.size)
+        if np.any(is_plant):
+            plant_target = target[is_plant]
+            taken_plants = np.bincount(slot[plant_target], weights=taken[plant_target],
+                                       minlength=self.plants.alive.size)
+            self.plants.biomass -= taken_plants
+            pop.plant_intake[rows[is_plant]] += alloc[is_plant]
+        if np.any(~is_plant):
+            carc_target = target[~is_plant]
+            taken_carc = np.bincount(slot[carc_target], weights=taken[carc_target],
+                                     minlength=self.carcasses.alive.size)
+            self.carcasses.biomass -= taken_carc
+            pop.meat_intake[rows[~is_plant]] += alloc[~is_plant]
         pop.bites[rows] += 1.0
+
         dead = self.plants.biomass <= _EPS
         if np.any(dead):
             self.plants.biomass[dead] = 0.0
             self.plants.alive[dead] = False
+        dead_c = self.carcasses.biomass <= _EPS
+        if np.any(dead_c):
+            self.carcasses.biomass[dead_c] = 0.0
+            self.carcasses.alive[dead_c] = False
+
+    # -- stage 10: predation --------------------------------------------------
+    def _predation(self, actions: Actions) -> None:
+        """Strike the nearest organism in reach; kill credit is damage-weighted.
+
+        All strikes in a tick are resolved simultaneously against the health
+        values at the start of the stage: a victim killed by one attacker can
+        still be hit by another, so the meat split is order-independent.
+        """
+        pop = self.population
+        attackers = np.flatnonzero(actions.attack & pop.alive)
+        if attackers.size == 0:
+            return
+        phen = self._refresh_phen()
+        mass = phen[:, 0]
+        reach = 0.5 * mass ** (1.0 / 3.0) + 2.0
+
+        grid = SpatialGrid(self.world, cell=80.0)
+        grid.build(pop.x, pop.y)
+        rep, tgt, dist = grid.candidates(pop.x, pop.y, radius_cells=2)
+        keep = actions.attack[rep] & (tgt != rep) & (dist <= reach[rep])
+        rep, tgt, dist = rep[keep], tgt[keep], dist[keep]
+        if rep.size == 0:
+            return
+
+        # Nearest target per attacker; ties by lowest target ID.
+        order = np.lexsort((pop.id[tgt], dist, rep))
+        rep, tgt = rep[order], tgt[order]
+        first = np.ones(rep.size, dtype=bool)
+        first[1:] = rep[1:] != rep[:-1]
+        rows = rep[first]
+        target = tgt[first]
+
+        # Strike cost: 0.05 * attack per actual strike (no target -> no attempt).
+        cost = np.minimum(self.cfg.energy.strike_cost * phen[rows, 5],
+                          pop.energy[rows])
+        pop.energy[rows] -= cost
+        paid = float(cost.sum())
+        self.ledger.mass_to_soil += paid
+        self.ledger.heat_out += paid
+        pop.hunts[rows] += 1.0
+        self.fields.add_pheromone(pop.x[rows], pop.y[rows], 0.05)
+
+        damage = strike_damage(phen[rows, 5], mass[rows],
+                               phen[target, 6], mass[target], self.cfg.energy)
+        np.add.at(pop.health, target, -damage)
+        pop.health[pop.health < 0.0] = 0.0
+        np.add.at(pop.damage_taken, target, damage)  # victims may be hit twice
+
+        # Credit is cumulative per victim and capped at 8 attackers.
+        for a, v, d in zip(rows, target, damage):
+            if d <= 0.0:
+                continue
+            vid = int(pop.id[v])
+            aid = int(pop.id[a])
+            entries = self._damage_credit.setdefault(vid, [])
+            for k, (existing, _) in enumerate(entries):
+                if existing == aid:
+                    entries[k] = (aid, entries[k][1] + float(d))
+                    break
+            else:
+                entries.append((aid, float(d)))
+                if len(entries) > 8:
+                    entries.pop(0)  # oldest entry dropped (truncated credit)
+
+        dead = np.flatnonzero(pop.alive & (pop.health <= 0.0))
+        if dead.size == 0:
+            return
+        killed = {int(pop.id[v]) for v in dead}
+        slot_by_id = {int(pop.id[i]): i for i in np.flatnonzero(pop.alive)}
+        for v in dead:
+            vid = int(pop.id[v])
+            total = float(pop.body[v] + pop.energy[v])
+            entries = self._damage_credit.pop(vid, [])
+            credit_total = sum(d for _, d in entries)
+            gained = 0.0
+            if total > 0.0 and entries and credit_total > 0.0:
+                for aid, dmg in entries:
+                    a = slot_by_id.get(aid)
+                    if a is None or not pop.alive[a]:
+                        continue  # attacker died this tick: its share is carrion
+                    eta = assimilation(self.cfg.energy.eta_m, phen[a, 9], phen[a, 4],
+                                       plant=False)
+                    raw = (dmg / credit_total) * total  # meat apportioned by credit
+                    emax = 10.0 * mass[a] ** 0.9
+                    gain = min(float(eta) * raw,
+                               max(emax - float(pop.energy[a]), 0.0))
+                    if gain <= 0.0:
+                        continue
+                    pop.energy[a] += gain
+                    pop.meat_intake[a] += gain
+                    gained += gain
+            leftover = total - gained
+            if leftover > _EPS:
+                self.carcasses.add(float(pop.x[v]), float(pop.y[v]), leftover)
+            pop.body[v] = 0.0
+            pop.energy[v] = 0.0
+            pop.alive[v] = False
+            pop.death_cause[v] = "predation"
 
     # -- stage 11: metabolism -------------------------------------------------
     def _metabolise(self) -> None:
@@ -359,10 +513,10 @@ class Engine:
         if n == 0:
             return
         phen = self._phen
-        health_dead = pop.health <= 0.0
-        starved = (pop.energy <= _EPS) & (pop.body <= _EPS)
+        health_dead = pop.alive & (pop.health <= 0.0)
+        starved = pop.alive & (pop.energy <= _EPS) & (pop.body <= _EPS)
 
-        past = pop.age > phen[:, 10]
+        past = pop.alive & (pop.age > phen[:, 10])
         old_age = np.zeros(n, dtype=bool)
         if np.any(past):
             p = 1.0 - np.exp(-(pop.age[past] - phen[past, 10]) / 200.0)
@@ -372,6 +526,8 @@ class Engine:
         dead = health_dead | starved | old_age
         if not np.any(dead):
             return
+        # Animal deaths already became carcasses in _predation; what is left here
+        # (starvation, senescence, residual health loss) is diffuse litter.
         self.detritus += float(pop.body[dead].sum() + pop.energy[dead].sum())
         pop.body[dead] = 0.0
         pop.energy[dead] = 0.0
@@ -383,11 +539,11 @@ class Engine:
     # -- stage 14: decomposition ---------------------------------------------
     def _decompose(self) -> None:
         amount = self.cfg.energy.decay * self.detritus
-        if amount <= 0.0:
-            return
-        self.detritus -= amount
-        self.ledger.mass_to_soil += amount
-        self.ledger.heat_out += amount
+        if amount > 0.0:
+            self.detritus -= amount
+            self.ledger.mass_to_soil += amount
+            self.ledger.heat_out += amount
+        self.carcasses.decay(self.ledger, self.cfg.energy.decay)
 
     # -- derived density fields ----------------------------------------------
     def _update_density_fields(self) -> None:
@@ -448,6 +604,7 @@ class Engine:
         pop = self.population
         idx = np.flatnonzero(pop.alive)
         pidx = np.flatnonzero(self.plants.alive)
+        cidx = np.flatnonzero(self.carcasses.alive)
         parts = [
             np.array([self.tick], dtype=np.int64),
             pop.id[idx], pop.genome[idx],
@@ -457,6 +614,9 @@ class Engine:
             np.round(pop.health[idx], 9), pop.age[idx], pop.generation[idx],
             self.plants.id[pidx], np.round(self.plants.x[pidx], 9),
             np.round(self.plants.y[pidx], 9), np.round(self.plants.biomass[pidx], 9),
+            self.carcasses.id[cidx], np.round(self.carcasses.x[cidx], 9),
+            np.round(self.carcasses.y[cidx], 9),
+            np.round(self.carcasses.biomass[cidx], 9),
             np.array([self.detritus, self.ledger.light_in, self.ledger.heat_out,
                       self.ledger.mass_to_soil, self.ledger.mass_from_soil,
                       self.ledger.mass_in], dtype=np.float64),
