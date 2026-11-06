@@ -884,13 +884,19 @@ def _assay_markdown(out_dir: str, *, scale: float, replicates: int,
                     arena_ticks: int, config: Config,
                     arenas: list[dict[str, Any]], pooled: dict[str, Any],
                     per_replicate: list[dict[str, Any]]) -> str:
+    run_label = ("this scaled run" if scale < 1.0
+                 else "this design-scale run")
     sign = "higher" if pooled["mean"] > 0 else "lower"
-    if pooled["ci_low"] <= 0.0 <= pooled["ci_high"]:
-        conclusion = ("the 95 % bootstrap CI includes zero, so this scaled run "
+    if pooled["n"] == 0:
+        conclusion = ("no arenas were measured (every replicate's evolution "
+                      "phase went extinct before sampling), so the assay "
+                      "produced no data")
+    elif pooled["ci_low"] <= 0.0 <= pooled["ci_high"]:
+        conclusion = (f"the 95 % bootstrap CI includes zero, so {run_label} "
                       "does not establish a difference")
     else:
         conclusion = (f"the 95 % bootstrap CI excludes zero; evolved genomes "
-                      f"had {sign} intake in this scaled run")
+                      f"had {sign} intake in {run_label}")
     lines = [
         "# Assay G — evolved vs random (paired arenas)",
         "",
@@ -954,7 +960,11 @@ def _assay_markdown(out_dir: str, *, scale: float, replicates: int,
         f"Wilcoxon p = {pooled['p']:.4f} on {pooled['n']} non-zero pairs. "
         f"Under the pre-registered reading, {conclusion}.",
         "",
-        "This is a scaled-down run: fewer, shorter replicates than DESIGN §13. "
+        ("This is a scaled-down run: smaller world and shorter horizons than "
+         "DESIGN §13, so it is a feasibility demonstration, not evidence at "
+         "design scale. " if scale < 1.0 else
+         "This is a design-scale run (horizon, arena length and plant density "
+         "as specified). "),
         "The result is reported as measured, including any null result.",
         "",
     ]

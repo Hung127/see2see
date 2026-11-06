@@ -29,7 +29,7 @@ def write_config(tmp_path, **overrides):
     return str(path)
 
 
-def test_run_headless_smoke(tmp_path):
+def test_headless_run(tmp_path):
     cfg_path = write_config(tmp_path)
     db_path = str(tmp_path / "run.db")
 

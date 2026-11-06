@@ -24,7 +24,7 @@ def make_config(seed=1, n=30):
     )
 
 
-def test_row_schema_stable():
+def test_stats_schema():
     assert isinstance(COLUMNS, tuple)
     a = Engine(make_config(seed=1))
     b = Engine(make_config(seed=1))

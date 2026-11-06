@@ -32,7 +32,8 @@ def test_initial_state_is_seeded():
     assert np.all(eng.population.body[eng.population.alive] > 0)
 
 
-def test_step_deterministic():
+def test_seed_reproducibility():
+    """Same seed -> identical state at every checkpoint; different seed -> not."""
     a = Engine(small_config(seed=7))
     b = Engine(small_config(seed=7))
     for target in (1, 10, 100):

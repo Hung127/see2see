@@ -83,7 +83,7 @@ def test_kill_transfers_biomass():
     eng.ledger.assert_closed(m0, eng.mass_stock(), e0, eng.energy_stock())
 
 
-def test_damage_split_proportional():
+def test_predation_split():
     eng, pop = scene(3)
     pop.x[:] = [100.0, 101.0, 99.0]
     pop.y[:] = [250.0, 250.0, 250.0]

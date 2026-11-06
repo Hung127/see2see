@@ -34,7 +34,7 @@ def small_config(ticks=2000, seed=5):
     )
 
 
-def test_mass_and_energy_conservation_all_channels():
+def test_mass_and_energy_conservation():
     eng = Engine(small_config())
     m0, e0 = eng.initial_mass, eng.initial_energy
     total0 = eng.initial_total

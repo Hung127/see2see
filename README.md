@@ -63,7 +63,7 @@ Exit codes: `0` success, `2` configuration error, `3` snapshot version error.
 
 ## Status
 
-Milestones M1–M7 are implemented and tested (151 tests). Measured throughput on
+Milestones M1–M7 are implemented and tested (158 tests). Measured throughput on
 a single-core machine misses the design's §11 targets — see
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the honest numbers. NEAT-style
 speciation (M8) is deferred.

@@ -49,10 +49,9 @@ Notes on the manipulations:
   Adding organisms adds mass, so the engine's ledger reference values are
   re-baselined — the setup is initial-condition construction, not a process
   inside the run.
-* **D** keeps the same number of plants per unit area in the config's
-  *initial count*? No: the config reduces the initial count to 40 % of A and the
-  hook clusters the survivors. Plant density is therefore genuinely lower than
-  A, and patches are separated by empty ground.
+* **D** reduces the initial plant count to 40 % of A (the config), and the hook
+  clusters the living plants into patches. Plant density is therefore genuinely
+  lower than A, and patches are separated by empty ground.
 * **E** warms the whole world for the remaining 15,000 ticks. The nutrient move
   is element-wise mass-conserving: each soil column in the right half is added
   to its mirror column on the left and then zeroed, so the soil total is

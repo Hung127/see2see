@@ -35,8 +35,11 @@ Per statistics interval (`stats.interval`, default 50 ticks):
 * **Trait means**: body size, speed, vision, attack, defence, diet preference,
   lifespan, mutation rate.
 * **Diversity**: mean pairwise genome distance over the 12 trait loci, mean
-  per-locus variance, diet entropy (normalised by `log2(20)` bins), and the
-  count of unique genome hashes (sha256 of the genome rounded to 1e-6).
+  per-locus variance (over the full 392-locus genome), diet entropy (normalised
+  by `log2(20)` bins), and the count of unique genome hashes (sha256 of the
+  genome rounded to 1e-6). Populations above 200 are subsampled uniformly
+  (`_DIVERSITY_CAP`) before the pairwise computation; the unique-genome count
+  always uses the whole population.
 * **Behaviour**: distance moved, bites, hunts, rest fraction, foraging
   efficiency, reproduction attempts and successes. (`mean_escapes` is present in
   the statistics schema but always zero: "escape" in this model is the continuous

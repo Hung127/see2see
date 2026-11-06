@@ -68,11 +68,16 @@ state apply them. No organism observes another organism's post-move position.
     from the genome and the parent's investment is consumed (part reserve, part
     body, 10 % waste to soil).
 11. **Mortality** — health ≤ 0, starvation (energy and body exhausted), and
-    age-dependent senescence beyond the lifespan locus.
+    probabilistic senescence past the lifespan locus
+    (`p = 1 − exp(−(age − lifespan)/200)` per tick). Non-predation deaths enter
+    the diffuse detritus pool (predation kills already left carcasses).
 12. **Decomposition** — detritus and carcasses mineralise at `decay · C` per
     tick: mass to soil, equal energy to heat.
-13. **Compaction, density fields, statistics** — dead removal, derived density
-    fields for sensing, and (every `stats.interval`) a statistics row.
+13. **Compaction and density fields** — dead removal and the derived density
+    fields used for sensing/visualisation. Statistics are *not* recorded inside
+    `step()`; the runner samples them every `stats.interval`. (Code comments
+    carry the DESIGN §7 stage numbers — environment 2, plants 3, sort 4,
+    move 8 … density fields 16 — and the list above groups them for reading.)
 
 ## Determinism contract
 

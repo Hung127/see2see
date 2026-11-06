@@ -65,7 +65,7 @@ def test_growth_paid_from_soil_and_light():
     assert led.mass_from_soil == pytest.approx(grew, rel=1e-12)
 
 
-def test_contention_proportional():
+def test_plant_competition():
     wc, fields = make_world()
     plants = make_plants(wc)
     plants.add(100.0, 100.0, 3.0)
