@@ -7,10 +7,11 @@ Subcommands:
 * ``reproduce``  — re-execute a stored run and compare the final checksum;
 * ``report``     — CSV + plots for a stored run;
 * ``viz``        — the pygame application (imported lazily so the CLI works
-  without pygame installed).
+  without pygame installed);
+* ``benchmark``  — measure headless throughput at a given population.
 
-``benchmark`` and ``experiments`` are added by their own tasks (25 and 26),
-because their modules do not exist yet and stubs are not acceptable.
+``experiments`` is added by Task 26, when its module exists (stubs are not
+acceptable).
 
 Exit codes: 0 success, 2 configuration error, 3 snapshot version error.
 Unexpected runtime errors are not swallowed: they print a traceback and exit 1.
@@ -76,6 +77,13 @@ def _parser() -> argparse.ArgumentParser:
     viz = sub.add_parser("viz", help="interactive pygame application")
     viz.add_argument("--config", required=True)
     viz.set_defaults(func=_cmd_viz)
+
+    bench = sub.add_parser("benchmark", help="measure headless throughput")
+    bench.add_argument("--population", type=int, required=True)
+    bench.add_argument("--ticks", type=int, required=True)
+    bench.add_argument("--profile", action="store_true",
+                       help="print a cProfile top-10 table for the same point")
+    bench.set_defaults(func=_cmd_benchmark)
     return p
 
 
@@ -188,6 +196,18 @@ def _cmd_report(args) -> int:
 def _cmd_viz(args) -> int:
     from .viz.app import launch  # lazy: pygame is an optional dependency
     launch(_load_config(args.config))
+    return 0
+
+
+def _cmd_benchmark(args) -> int:
+    from .bench import profile_point, run_point
+
+    result = run_point(args.population, args.ticks)
+    print(f"{result['population']} organisms, {result['plants']} plants, "
+          f"{result['ticks']} ticks: {result['ticks_per_s']} ticks/s "
+          f"(mean population {result['mean_population']})")
+    if args.profile:
+        print(profile_point(args.population, args.ticks))
     return 0
 
 

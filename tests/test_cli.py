@@ -77,6 +77,10 @@ def test_bad_config_exit_code(tmp_path):
     assert main(["run", "--config", str(missing)]) == 2
 
 
+def test_benchmark_smoke():
+    assert main(["benchmark", "--population", "20", "--ticks", "5"]) == 0
+
+
 def test_snapshot_version_exit_code(tmp_path):
     cfg_path = write_config(tmp_path)
     cfg = load_config(cfg_path)
