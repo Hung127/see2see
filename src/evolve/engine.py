@@ -512,7 +512,7 @@ class Engine:
         want = np.flatnonzero(actions.reproduce & mature & (pop.energy >= threshold))
         if want.size == 0:
             return
-        sexual = self.cfg.genetics.mode == "sexual"
+        mode = self.cfg.genetics.mode
         used: set[int] = set()
 
         for i in want:  # slot order == ascending ID (see sort_by_id)
@@ -522,10 +522,9 @@ class Engine:
                 continue
             pop.repro_attempts[i] += 1.0
             used.add(i)
-            if sexual:
-                mate = self._find_mate(i, want, used, emax, threshold)
-                if mate < 0:
-                    continue
+            mate = (-1 if mode == "asexual"
+                    else self._find_mate(i, want, used, emax, threshold))
+            if mate >= 0:
                 used.add(mate)
                 pop.repro_attempts[mate] += 1.0
                 child_genome = crossover(pop.genome[i], pop.genome[mate], self.rng)
@@ -544,13 +543,16 @@ class Engine:
                 if ok:
                     pop.energy[mate] -= share
                     pop.repro_success[mate] += 1.0
-            else:
-                child_genome, n_mut = mutate(
-                    pop.genome[i][None, :], phen[i, 11], self.rng, self.cfg.genetics
-                )
-                self.mutations_total += int(n_mut.sum())
-                self._birth(i, child_genome[0], invest[i], invest[i],
-                            int(pop.generation[i]) + 1, (int(pop.id[i]), None))
+                continue
+            if mode == "sexual":
+                continue  # no mate: the attempt fails with nobody paying
+            # asexual, or 'both' without an available mate
+            child_genome, n_mut = mutate(
+                pop.genome[i][None, :], phen[i, 11], self.rng, self.cfg.genetics
+            )
+            self.mutations_total += int(n_mut.sum())
+            self._birth(i, child_genome[0], invest[i], invest[i],
+                        int(pop.generation[i]) + 1, (int(pop.id[i]), None))
         # Children changed the row count; refresh the phenotype cache.
         self._phen = phenotype(pop.genome)
 

@@ -817,10 +817,8 @@ def run_assay(out_dir: str, *, scale: float = DEFAULT_SCALE,
     for rep in range(int(replicates)):
         d = np.asarray([a["diff"] for a in arenas if a["replicate"] == rep],
                        dtype=np.float64)
-        if d.size == 0:
-            per_replicate.append({"replicate": rep, "n": 0, "p": 1.0,
-                                  "mean": 0.0, "ci_low": 0.0, "ci_high": 0.0})
-            continue
+        # A replicate whose evolution phase went extinct contributes no arenas;
+        # _analyse reports n = 0 rather than inventing a result.
         stats = _analyse(d, Rng(base_seed + 1000 + rep), prefix="")
         stats["replicate"] = rep
         per_replicate.append(stats)

@@ -138,3 +138,31 @@ def test_mass_ledger_still_closed_after_births():
     m0, e0 = eng.mass_stock(), eng.energy_stock()  # measured after the energy boost
     eng._reproduce(all_reproduce(pop.n_alive))
     eng.ledger.assert_closed(m0, eng.mass_stock(), e0, eng.energy_stock())
+
+
+def test_both_mode_falls_back_to_asexual_without_mate():
+    """genetics.mode='both': sexual when a mate is in reach, asexual otherwise."""
+    eng = make_engine(mode="both", n=2)
+    pop = eng.population
+    phen, emax = force_ready(eng)
+    pop.x[:] = [100.0, 400.0]  # far apart: no mate in reach
+    pop.y[:] = [250.0, 250.0]
+    n0 = pop.n_alive
+    eng._reproduce(all_reproduce(pop.n_alive))
+    assert pop.n_alive == n0 + 2  # both parents fall back to asexual birth
+    for child in (n0, n0 + 1):
+        assert int(pop.parent_b[child]) == -1  # asexual: no second parent
+
+    # and with a mate in reach it is sexual: both parents pay half
+    eng2 = make_engine(mode="both", n=2)
+    pop2 = eng2.population
+    phen2, emax2 = force_ready(eng2)
+    pop2.x[:] = [100.0, 101.0]
+    pop2.y[:] = [250.0, 250.0]
+    n02 = pop2.n_alive
+    eng2._reproduce(all_reproduce(pop2.n_alive))
+    assert pop2.n_alive == n02 + 1
+    child2 = n02
+    assert int(pop2.parent_b[child2]) == int(pop2.id[1])
+    invest = phen2[0, 8] * emax2[0]
+    assert pop2.energy[0] == np.float64(0.9 * emax2[0]) - invest / 2.0
