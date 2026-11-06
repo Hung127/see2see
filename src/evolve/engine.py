@@ -42,9 +42,11 @@ _EPS = 1e-12
 class Engine:
     """One deterministic simulation instance."""
 
-    def __init__(self, config: Config, db_path: str | None = None) -> None:
+    def __init__(self, config: Config, db_path: str | None = None,
+                 debug: bool = False) -> None:
         self.cfg = config
         self.db_path = db_path
+        self.debug = bool(debug)
         self.rng = Rng(config.seed)
         self.world = World(config.world)
         self.fields = Fields(config.world, config.environment, self.rng)
@@ -66,6 +68,8 @@ class Engine:
         self._seed()
         self.initial_mass = self.mass_stock()
         self.initial_energy = self.energy_stock()
+        self.initial_soil = self.soil_stock()
+        self.initial_total = self.initial_mass + self.initial_soil
         self._update_density_fields()
 
     # -- construction ---------------------------------------------------------
@@ -102,6 +106,14 @@ class Engine:
                      + self.plants.total_biomass() + self.carcasses.total_biomass()
                      + self.detritus)
 
+    def soil_stock(self) -> float:
+        """Inorganic nutrient pool (mass only, no chemical energy)."""
+        return float(self.fields.soil.sum())
+
+    def total_mass(self) -> float:
+        """Full-system mass: organic stock + soil (DESIGN §6.1)."""
+        return self.mass_stock() + self.soil_stock()
+
     # -- tick -----------------------------------------------------------------
     def step(self) -> None:
         self.tick += 1
@@ -123,6 +135,10 @@ class Engine:
         self.plants.remove_dead()
         self.carcasses.remove_dead()
         self._update_density_fields()             # 16 (density fields for viz)
+        if self.debug and self.tick % max(1, int(self.cfg.stats.interval)) == 0:
+            self.ledger.assert_closed(self.initial_mass, self.mass_stock(),
+                                      self.initial_energy, self.energy_stock())
+            self.ledger.assert_full_closed(self.initial_total, self.total_mass())
 
     def run(self, ticks: int) -> None:
         for _ in range(ticks):
@@ -197,7 +213,6 @@ class Engine:
         # 0 = plant, 1 = carcass; keeps the two ID spaces apart in tie-breaks.
         kind = np.concatenate([np.zeros(p_idx.size, dtype=np.int8),
                                np.ones(c_idx.size, dtype=np.int8)])
-        slot = np.concatenate([p_idx, c_idx])
         rid = np.concatenate([self.plants.id[p_idx], self.carcasses.id[c_idx]])
         supply = np.concatenate([self.plants.biomass[p_idx],
                                  self.carcasses.biomass[c_idx]])
@@ -259,19 +274,14 @@ class Engine:
         self.detritus += float(undigested.sum())
 
         # `target` may repeat (several eaters on one resource), so accumulate
-        # with bincount: fancy-index `-=` would apply only the last write.
+        # the take per resource, then subtract each resource exactly once.
         taken = np.bincount(target, weights=alloc, minlength=rx.size)
-        if np.any(is_plant):
-            plant_target = target[is_plant]
-            taken_plants = np.bincount(slot[plant_target], weights=taken[plant_target],
-                                       minlength=self.plants.alive.size)
-            self.plants.biomass -= taken_plants
+        n_plant_res = p_idx.size
+        if n_plant_res:
+            self.plants.biomass[p_idx] -= taken[:n_plant_res]
             pop.plant_intake[rows[is_plant]] += alloc[is_plant]
-        if np.any(~is_plant):
-            carc_target = target[~is_plant]
-            taken_carc = np.bincount(slot[carc_target], weights=taken[carc_target],
-                                     minlength=self.carcasses.alive.size)
-            self.carcasses.biomass -= taken_carc
+        if c_idx.size:
+            self.carcasses.biomass[c_idx] -= taken[n_plant_res:]
             pop.meat_intake[rows[~is_plant]] += alloc[~is_plant]
         pop.bites[rows] += 1.0
 
@@ -320,6 +330,8 @@ class Engine:
         cost = np.minimum(self.cfg.energy.strike_cost * phen[rows, 5],
                           pop.energy[rows])
         pop.energy[rows] -= cost
+        aix, aiy = self.fields.cell_index(pop.x[rows], pop.y[rows])
+        np.add.at(self.fields.soil, (aix, aiy), cost)
         paid = float(cost.sum())
         self.ledger.mass_to_soil += paid
         self.ledger.heat_out += paid
@@ -396,6 +408,10 @@ class Engine:
 
         paid = np.minimum(cost, pop.energy)
         pop.energy -= paid
+        # Respired matter returns to the soil pool at the organism's cell: the
+        # ledger counter and the physical pool must move together (DESIGN §6.1).
+        cix, ciy = self.fields.cell_index(pop.x, pop.y)
+        np.add.at(self.fields.soil, (cix, ciy), paid)
         total_paid = float(paid.sum())
         self.ledger.mass_to_soil += total_paid
         self.ledger.heat_out += total_paid
@@ -405,6 +421,7 @@ class Engine:
         if np.any(starving):
             burn = np.minimum(self.cfg.energy.catabolism, pop.body[starving])
             pop.body[starving] -= burn
+            np.add.at(self.fields.soil, (cix[starving], ciy[starving]), burn)
             burned = float(burn.sum())
             self.ledger.mass_to_soil += burned
             self.ledger.heat_out += burned
@@ -508,6 +525,9 @@ class Engine:
             return False  # cap reached: parent pays nothing
         pop.energy[parent] -= payer_share
         pop.repro_success[parent] += 1.0
+        bix, biy = self.fields.cell_index(np.array([pop.x[parent]]),
+                                          np.array([pop.y[parent]]))
+        np.add.at(self.fields.soil, (bix, biy), waste)
         self.ledger.mass_to_soil += waste
         self.ledger.heat_out += waste
         return True
@@ -547,9 +567,12 @@ class Engine:
         amount = self.cfg.energy.decay * self.detritus
         if amount > 0.0:
             self.detritus -= amount
+            # The scalar detritus pool has no position: mineralised mass returns
+            # evenly across the grid (coarse-summary ruling, documented).
+            self.fields.soil += amount / self.fields.soil.size
             self.ledger.mass_to_soil += amount
             self.ledger.heat_out += amount
-        self.carcasses.decay(self.ledger, self.cfg.energy.decay)
+        self.carcasses.decay(self.ledger, self.cfg.energy.decay, self.fields)
 
     # -- derived density fields ----------------------------------------------
     def _update_density_fields(self) -> None:

@@ -76,13 +76,21 @@ class Carcasses:
             setattr(self, name, getattr(self, name)[keep])
 
     # -- processes ------------------------------------------------------------
-    def decay(self, ledger: Ledger, rate: float) -> float:
-        """Mineralise ``rate·C`` per living carcass; returns total mass decayed."""
+    def decay(self, ledger: Ledger, rate: float, fields=None) -> float:
+        """Mineralise ``rate·C`` per living carcass; returns total mass decayed.
+
+        When ``fields`` is given, the mineralised mass is deposited into the soil
+        grid at each carcass position (the ledger counter alone would leave the
+        physical soil pool short).
+        """
         idx = np.flatnonzero(self.alive)
         if idx.size == 0:
             return 0.0
         amount = rate * self.biomass[idx]
         self.biomass[idx] -= amount
+        if fields is not None:
+            ix, iy = fields.cell_index(self.x[idx], self.y[idx])
+            np.add.at(fields.soil, (ix, iy), amount)
         total = float(amount.sum())
         ledger.mass_to_soil += total
         ledger.heat_out += total

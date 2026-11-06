@@ -49,17 +49,36 @@ class Ledger:
 
     def assert_closed(self, initial_mass: float, final_mass: float,
                       initial_energy: float, final_energy: float) -> None:
-        """Assert both invariants to ``rtol = 1e-9`` (DESIGN §6.1)."""
-        expected_mass = initial_mass + self.mass_from_soil - self.mass_to_soil + self.mass_in
+        """Assert the *organic* invariants to ``rtol = 1e-9`` (DESIGN §6.1).
+
+        The organic stock is organisms + plants + detritus + carcasses. Mass
+        enters it only from soil (``mass_from_soil``) and leaves only to soil
+        (``mass_to_soil``); ``mass_in`` is an input to the *soil* pool, not to
+        organic matter, so it must not appear here (it would double-count a
+        nutrient pulse that cycles soil → plant → soil). The full-system
+        invariant — organic + soil = initial + mass_in — is checked by
+        :meth:`assert_full_closed`.
+        """
+        expected_mass = initial_mass + self.mass_from_soil - self.mass_to_soil
         expected_energy = initial_energy + self.light_in - self.heat_out
-        assert np.isclose(final_mass, expected_mass, rtol=RTOL, atol=0.0), (
+        # rtol 1e-9 is the contract; the 1e-9 bu absolute floor only matters when
+        # a stock has decayed to ~0, where a pure relative test measures nothing
+        # but float summation order (~1e-12 bu over thousands of transfers).
+        assert np.isclose(final_mass, expected_mass, rtol=RTOL, atol=1e-9), (
             f"mass ledger open: stock {final_mass!r} != expected {expected_mass!r} "
-            f"(to_soil={self.mass_to_soil!r}, from_soil={self.mass_from_soil!r}, "
-            f"in={self.mass_in!r})"
+            f"(to_soil={self.mass_to_soil!r}, from_soil={self.mass_from_soil!r})"
         )
-        assert np.isclose(final_energy, expected_energy, rtol=RTOL, atol=0.0), (
+        assert np.isclose(final_energy, expected_energy, rtol=RTOL, atol=1e-9), (
             f"energy ledger open: stock {final_energy!r} != expected {expected_energy!r} "
             f"(light_in={self.light_in!r}, heat_out={self.heat_out!r})"
+        )
+
+    def assert_full_closed(self, initial_total: float, final_total: float) -> None:
+        """Full-system mass invariant: organic + soil = initial + mass_in."""
+        expected = initial_total + self.mass_in
+        assert np.isclose(final_total, expected, rtol=RTOL, atol=1e-9), (
+            f"full mass ledger open: {final_total!r} != {expected!r} "
+            f"(mass_in={self.mass_in!r})"
         )
 
 

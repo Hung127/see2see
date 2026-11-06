@@ -140,12 +140,13 @@ class Events:
             if idx.size:
                 ix, iy = f.cell_index(plants.x[idx], plants.y[idx])
                 burning = mask[ix, iy]
-                burned = float(plants.biomass[idx[burning]].sum())
-                if burned > 0.0:
+                burned = plants.biomass[idx[burning]].copy()
+                if burned.size and burned.sum() > 0.0:
+                    np.add.at(f.soil, (ix[burning], iy[burning]), burned)
                     plants.biomass[idx[burning]] = 0.0
                     plants.alive[idx[burning]] = False
-                    engine.ledger.mass_to_soil += burned
-                    engine.ledger.heat_out += burned
+                    engine.ledger.mass_to_soil += float(burned.sum())
+                    engine.ledger.heat_out += float(burned.sum())
             pop = engine.population
             pidx = np.flatnonzero(pop.alive)
             if pidx.size:
