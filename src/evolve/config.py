@@ -85,6 +85,11 @@ class EnergyConfig:
     decay: float = 0.015
     catabolism: float = 0.5
     starvation_health_loss: float = 1.0
+    # Drought water stress: extra cost = water_stress_cost * C_basal * m.
+    # DESIGN §3.3 fixes the existence of the penalty, not its size; 2.0 is the
+    # calibrated value (docs/CALIBRATION.md §7): at m = 1 it adds ~64 % to a
+    # founder's metabolic bill, enough to be visible in mortality over a season.
+    water_stress_cost: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -126,6 +131,10 @@ class EnvironmentConfig:
     # Nutrients deposited where organisms respire must not stay stranded away
     # from plant roots, or plants starve on a global surplus (CALIBRATION.md).
     soil_diffusion: float = 0.10
+    # Flood damage: health lost per tick by an organism in a flooded cell,
+    # per unit rainfall and per unit of depth below full height (DESIGN §3.2:
+    # terrain height sets flood damage, so low ground is hit repeatedly).
+    flood_damage: float = 10.0
     events: tuple[EventConfig, ...] = ()
     # Random events: (kind, expected events per tick); spawned by Poisson draws.
     random_events: tuple[tuple[str, float], ...] = ()

@@ -8,9 +8,12 @@ never a genome (asserted by ``test_events_never_touch_genomes``).
 Continuous events (active for ``duration`` ticks, re-applied every tick):
 
 * ``drought``      — moisture ``×(1−m)``, plant growth ``×(1−0.8·m)``, animal
-  water stress ``m`` (extra metabolic cost ``0.5·C_basal·m``, paid by the
-  engine's metabolism stage);
-* ``heavy_rain``   — moisture ``+m`` (clamped to [0, 1]);
+  water stress ``m`` (extra metabolic cost
+  ``water_stress_cost·C_basal·m``, paid by the engine's metabolism stage);
+* ``heavy_rain``   — moisture ``+m`` (clamped to [0, 1]); organisms in the
+  region stand in water of depth ``m·(1−terrain)`` and lose
+  ``flood_damage·depth`` health per tick (DESIGN §3.2: terrain height sets
+  flood damage, so low ground is hit hardest);
 * ``heatwave``     — temperature ``+10·m`` °C;
 * ``cold_snap``    — temperature ``−10·m`` °C.
 
@@ -100,7 +103,7 @@ class Events:
             if not ev.active_at(tick):
                 continue
             if ev.kind in CONTINUOUS:
-                self._apply_continuous(ev)
+                self._apply_continuous(ev, engine)
             elif ev.kind in INSTANT and i not in self._fired:
                 self._fired.add(i)
                 self._apply_instant(ev, engine)
@@ -115,7 +118,7 @@ class Events:
         y = np.broadcast_to(xs[None, :], (n, n))  # axis 1 = iy (y index)
         return ((x - cx) ** 2 + (y - cy) ** 2) <= r * r
 
-    def _apply_continuous(self, ev: Event) -> None:
+    def _apply_continuous(self, ev: Event, engine) -> None:
         mask = self._mask(ev.region)
         m = float(ev.magnitude)
         f = self.fields
@@ -125,6 +128,17 @@ class Events:
             f.water_stress[mask] += m
         elif ev.kind == "heavy_rain":
             f.moisture[mask] = np.clip(f.moisture[mask] + m, 0.0, 1.0)
+            # Standing water: rain depth grows toward low ground (DESIGN §3.2
+            # ties flood damage to terrain height), damaging organisms there.
+            pop = engine.population
+            pidx = np.flatnonzero(pop.alive)
+            if pidx.size:
+                pix, piy = f.cell_index(pop.x[pidx], pop.y[pidx])
+                hit = mask[pix, piy]
+                depth = m * (1.0 - f.terrain[pix, piy])
+                harm = engine.cfg.environment.flood_damage * depth
+                pop.health[pidx[hit]] = np.maximum(
+                    pop.health[pidx[hit]] - harm[hit], 0.0)
         elif ev.kind == "heatwave":
             f.temperature[mask] += 10.0 * m
         elif ev.kind == "cold_snap":

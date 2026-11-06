@@ -406,9 +406,9 @@ class Engine:
         env = self.fields.sample(pop.x, pop.y)
         temp = env["temperature"]
         basal = basal_cost(phen, self.cfg.energy)
-        # Drought water stress (DESIGN §3.3): extra cost 0.5 * C_basal * m.
+        # Drought water stress (DESIGN §3.3): extra cost = k * C_basal * m.
         cost = metabolic_cost(phen, self._speed, temp, self.cfg.energy) \
-            + basal * 0.5 * env["water_stress"]
+            + basal * self.cfg.energy.water_stress_cost * env["water_stress"]
 
         paid = np.minimum(cost, pop.energy)
         pop.energy -= paid
