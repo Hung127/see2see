@@ -112,6 +112,47 @@ class SpatialGrid:
         return lo[order], hi[order]
 
     # -- queries -------------------------------------------------------------
+    def candidates(self, qx: np.ndarray, qy: np.ndarray,
+                   radius_cells: int = 2) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """All ``(query, target, distance)`` triples within the stencil.
+
+        The caller filters by its own per-query radius; this only guarantees the
+        stencil bound ``radius_cells * cell``.
+        """
+        qx = np.asarray(qx, dtype=np.float64)
+        qy = np.asarray(qy, dtype=np.float64)
+        nq = qx.size
+        if nq == 0 or self.x.size == 0:
+            z = np.zeros(0, dtype=np.int64)
+            return z, z.copy(), np.zeros(0)
+        qix = np.floor(qx / self.cell_x).astype(np.int64) % self.nx
+        qiy = np.floor(qy / self.cell_y).astype(np.int64) % self.ny
+        counts = self._counts()
+        order, _cells = self._sorted()
+        starts = self._starts
+        src_parts, tgt_parts, d_parts = [], [], []
+        for dx in range(-radius_cells, radius_cells + 1):
+            for dy in range(-radius_cells, radius_cells + 1):
+                cell = ((qiy + dy) % self.ny) * self.nx + ((qix + dx) % self.nx)
+                n_b = counts[cell]
+                total = int(n_b.sum())
+                if total == 0:
+                    continue
+                rep_q = np.repeat(np.arange(nq, dtype=np.int64), n_b)
+                cum = np.cumsum(n_b) - n_b
+                inner = np.arange(total, dtype=np.int64) - np.repeat(cum, n_b)
+                t_pos = starts[cell][rep_q] + inner
+                t_idx = order[t_pos]
+                d = self.world.distance(qx[rep_q], qy[rep_q], self.x[t_idx], self.y[t_idx])
+                src_parts.append(rep_q)
+                tgt_parts.append(t_idx)
+                d_parts.append(d)
+        if not src_parts:
+            z = np.zeros(0, dtype=np.int64)
+            return z, z.copy(), np.zeros(0)
+        return (np.concatenate(src_parts), np.concatenate(tgt_parts),
+                np.concatenate(d_parts))
+
     def nearest(self, qx: np.ndarray, qy: np.ndarray,
                 tx: np.ndarray, ty: np.ndarray,
                 mask: np.ndarray | None = None,
