@@ -17,6 +17,11 @@ BOUNDARY_MODES = ("wrap", "reflect", "hard")
 REPRO_MODES = ("asexual", "sexual", "both")
 INTERACTION_MODES = ("off", "sampled", "full")
 
+#: Version of the model spec (docs/DESIGN.md) that a stored run conforms to.
+#: A run is reproduced by ``(config_yaml, seed, spec_version, git_commit)``;
+#: bump this whenever a change would make old runs non-reproducible.
+SPEC_VERSION = "1"
+
 
 @dataclass(frozen=True)
 class WorldConfig:
@@ -178,17 +183,29 @@ _SECTIONS: dict[str, type] = {
 }
 
 
+def _event_from_dict(value: Any) -> Any:
+    """Rebuild an EventConfig so YAML lists become the declared tuples."""
+    if not isinstance(value, dict):
+        return value
+    kwargs = dict(value)
+    if "region" in kwargs:
+        kwargs["region"] = tuple(kwargs["region"])
+    return EventConfig(**kwargs)
+
+
 def _build(cls: type, data: dict[str, Any]) -> Any:
     """Instantiate a config dataclass, rejecting unknown keys loudly."""
     allowed = {f.name for f in fields(cls)}
     unknown = set(data) - allowed
     if unknown:
         raise ValueError(f"unknown configuration key(s) for {cls.__name__}: {sorted(unknown)}")
-    if cls is EnvironmentConfig and "events" in data:
+    if cls is EnvironmentConfig:
         data = dict(data)
-        data["events"] = tuple(
-            EventConfig(**e) if isinstance(e, dict) else e for e in data["events"]
-        )
+        if "events" in data:
+            data["events"] = tuple(_event_from_dict(e) for e in data["events"])
+        if "random_events" in data:
+            data["random_events"] = tuple(
+                (str(kind), float(rate)) for kind, rate in data["random_events"])
     return cls(**data)
 
 
