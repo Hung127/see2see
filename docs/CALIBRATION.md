@@ -136,3 +136,36 @@ for _ in range(6000):
 print(eng.population.n_alive, eng.births_total, eng.plants.total_biomass())
 EOF
 ```
+
+## 8. Follow-up (post-hoc): the equilibrium is not asymptotic
+
+This section was added after the experiment programme (docs/RESULTS.md). The
+calibration above was correct at its stated horizon, but the long run was not
+long enough to see the system's fate. Continuing **seed 1, design scale** past
+tick 6,000:
+
+| tick | population | births (cum) | deaths (cum) | mean E | plants (bu) |
+|------|------------|--------------|--------------|--------|-------------|
+| 6,000 | 52 | 431 | 679 | 19.7 | 11,832 |
+| 7,700 | 27 | 446 | 719 | 22.6 | 12,339 |
+| 9,400 | 6 | 446 | 740 | 23.6 | 12,859 |
+| 11,100 | 1 | 446 | 745 | 24.0 | 13,039 |
+| 11,950 | 0 | 446 | 746 | 0.0 | 13,069 |
+
+The tick-6,000 row reproduces the calibration record exactly (52 / 431 /
+11,832), so nothing was retuned. Beyond it the population decays to extinction
+while plants sit at carrying capacity and the survivors hold **full reserves**
+(0.99·`E_max`). A clean forward pass at tick 6,000 shows 39 organisms satisfying
+the maturity and energy gates, none with `o6 > 0.5` (max 0.439): the
+reproduction output has drifted just below the fixed decode threshold.
+
+So criterion 3 ("a non-extinct equilibrium") was met at the 6,000-tick test
+horizon but the certified population is **not guaranteed to persist**: this
+seed's lineage decays to extinction by ~11,950. A second design-scale run with
+seed 2 is still alive at tick 12,000 (76 organisms, births continuing), so the
+outcome is seed-dependent rather than a universal property of the constants.
+This is reported in `RESULTS.md` rather than tuned away: DESIGN §18 permits one
+calibration window and it is closed, so the constants are left as adopted. A
+larger effective population or a decode threshold other than 0.5 would
+plausibly change the outcome, but both are model changes outside the
+calibration window.

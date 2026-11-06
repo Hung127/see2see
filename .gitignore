@@ -15,7 +15,10 @@ venv/
 runs/
 out/
 plots/
-experiments_out/
+experiments_out/**
+!experiments_out/**/
+!experiments_out/**/*.md
+!experiments_out/**/*.csv
 *.npz
 !tests/**/*.npz
 .idea/
