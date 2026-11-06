@@ -95,3 +95,47 @@ def validate_bounds(genes: np.ndarray) -> None:
 def hash_genome(genes: np.ndarray) -> bytes:
     """Stable per-genome identity used for diversity statistics."""
     return hashlib.sha256(np.round(np.asarray(genes, dtype=np.float64), 6).tobytes()).digest()
+
+
+def mutate(genes: np.ndarray, rates: np.ndarray, rng: Rng,
+           cfg: "GeneticsConfig | None" = None) -> tuple[np.ndarray, np.ndarray]:
+    """Per-locus Bernoulli mutation (DESIGN §4.2).
+
+    ``rates`` is the per-organism mutation rate (gene 11, mapped). Trait loci move
+    with ``sigma_trait``; neural loci with ``sigma_w·(1 + |w|/4)``. A small
+    fraction of mutations (``large_effect_p``) is ``large_effect_mult`` times
+    bigger. Trait loci are clipped to ``[0, 1]``, neural loci to ``[-8, 8]``.
+
+    Returns ``(child, n_mutations)``. Draw order: mask, deltas, large-effect flags.
+    """
+    from .config import GeneticsConfig
+
+    cfg = cfg or GeneticsConfig()
+    genes = np.atleast_2d(np.asarray(genes, dtype=np.float64))
+    n = genes.shape[0]
+    rates = np.broadcast_to(np.asarray(rates, dtype=np.float64), (n,))[:, None]
+
+    mask = rng.random(genes.shape) < rates
+    sigma = np.empty_like(genes)
+    sigma[:, :N_TRAITS] = cfg.sigma_trait
+    sigma[:, N_TRAITS:] = cfg.sigma_w * (1.0 + np.abs(genes[:, N_TRAITS:]) / 4.0)
+    delta = rng.normal(0.0, 1.0, size=genes.shape) * sigma
+    big = rng.random(genes.shape) < cfg.large_effect_p
+    delta = np.where(big, delta * cfg.large_effect_mult, delta)
+
+    child = genes + np.where(mask, delta, 0.0)
+    child[:, :N_TRAITS] = np.clip(child[:, :N_TRAITS], 0.0, 1.0)
+    child[:, N_TRAITS:] = np.clip(child[:, N_TRAITS:], NN_LO, NN_HI)
+    return child, mask.sum(axis=1)
+
+
+def crossover(a: np.ndarray, b: np.ndarray, rng: Rng) -> np.ndarray:
+    """Uniform per-locus crossover; no blending (DESIGN §4.2)."""
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    single = a.ndim == 1
+    a = np.atleast_2d(a)
+    b = np.atleast_2d(b)
+    mask = rng.random(a.shape) < 0.5
+    child = np.where(mask, a, b)
+    return child[0] if single else child
