@@ -1,0 +1,207 @@
+"""Command-line interface (DESIGN §8/§9).
+
+Subcommands:
+
+* ``run``        — execute a configuration headless, optionally into an
+  experiment database and optionally resuming from a snapshot;
+* ``reproduce``  — re-execute a stored run and compare the final checksum;
+* ``report``     — CSV + plots for a stored run;
+* ``viz``        — the pygame application (imported lazily so the CLI works
+  without pygame installed).
+
+``benchmark`` and ``experiments`` are added by their own tasks (25 and 26),
+because their modules do not exist yet and stubs are not acceptable.
+
+Exit codes: 0 success, 2 configuration error, 3 snapshot version error.
+Unexpected runtime errors are not swallowed: they print a traceback and exit 1.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+from dataclasses import replace
+
+import yaml
+
+from .config import Config, load_config
+from .engine import Engine
+from .persistence import (
+    ExperimentDB, SnapshotVersionError, load_snapshot, save_snapshot,
+)
+from .stats import StatsRecorder, export_csv, make_plots
+
+
+class ConfigError(Exception):
+    """A configuration file could not be loaded or is invalid."""
+
+
+def _load_config(path: str) -> Config:
+    try:
+        return load_config(path)
+    except (ValueError, OSError, yaml.YAMLError) as exc:
+        raise ConfigError(f"cannot load configuration {path!r}: {exc}") from exc
+
+
+def _parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="evolve", description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="command", required=True)
+
+    run = sub.add_parser("run", help="run a simulation headless")
+    run.add_argument("--config", required=True)
+    run.add_argument("--ticks", type=int, default=None,
+                     help="total ticks to reach (overrides config.ticks)")
+    run.add_argument("--headless", action="store_true",
+                     help="accepted for interface compatibility; a run never "
+                          "opens a window")
+    run.add_argument("--db", default=None, help="experiment database to write")
+    run.add_argument("--seed", type=int, default=None, help="override config seed")
+    run.add_argument("--resume", default=None,
+                     help="snapshot file to resume from (config must match)")
+    run.set_defaults(func=_cmd_run)
+
+    rep = sub.add_parser("reproduce", help="re-execute a stored run")
+    rep.add_argument("--db", required=True)
+    rep.add_argument("--run-id", type=int, required=True)
+    rep.set_defaults(func=_cmd_reproduce)
+
+    report = sub.add_parser("report", help="CSV and plots for a stored run")
+    report.add_argument("--db", required=True)
+    report.add_argument("--run-id", type=int, default=None,
+                        help="default: the latest run")
+    report.add_argument("--out", required=True)
+    report.set_defaults(func=_cmd_report)
+
+    viz = sub.add_parser("viz", help="interactive pygame application")
+    viz.add_argument("--config", required=True)
+    viz.set_defaults(func=_cmd_viz)
+    return p
+
+
+def _cmd_run(args) -> int:
+    cfg = _load_config(args.config)
+    if args.seed is not None:
+        cfg = replace(cfg, seed=int(args.seed))
+    if args.ticks is not None:
+        cfg = replace(cfg, ticks=int(args.ticks))
+    target = int(cfg.ticks)
+
+    db = ExperimentDB(args.db) if args.db else None
+    run_id = None
+    if db is not None:
+        exp_id = db.create_experiment("cli-run", cfg, seed=cfg.seed)
+        run_id = db.start_run(exp_id)
+
+    try:
+        if args.resume:
+            try:
+                eng = load_snapshot(args.resume, cfg)
+            except SnapshotVersionError:
+                raise
+            except ValueError as exc:
+                raise ConfigError(str(exc)) from exc
+        else:
+            eng = Engine(cfg)
+
+        recorder = StatsRecorder()
+        started = time.perf_counter()
+        while eng.tick < target:
+            eng.step()
+            if eng.tick % max(1, int(cfg.stats.interval)) == 0:
+                row = recorder.record(eng)
+                if db is not None:
+                    db.flush_stats(run_id, [row])
+            if (db is not None and cfg.stats.snapshot_interval > 0
+                    and eng.tick % int(cfg.stats.snapshot_interval) == 0):
+                directory = os.path.dirname(os.path.abspath(args.db))
+                snap_path = os.path.join(
+                    directory, f"snap_run{run_id}_{eng.tick}.npz")
+                manifest = save_snapshot(eng, snap_path)
+                db.add_snapshot(run_id, eng.tick, snap_path, manifest["sha256"],
+                                manifest["format_version"],
+                                rng_state=None, manifest=manifest)
+        elapsed = time.perf_counter() - started
+        checksum = eng.checksum()
+        if db is not None:
+            for ev in eng.events.log:
+                db.record_event(run_id, ev.start_tick, ev.kind,
+                                {"duration": ev.duration,
+                                 "magnitude": ev.magnitude,
+                                 "region": list(ev.region)})
+            db.finish_run(run_id, eng.tick, "completed", checksum=checksum)
+    finally:
+        if db is not None:
+            db.close()
+
+    rate = eng.tick / elapsed if elapsed > 0 else 0.0
+    print(f"run {run_id if run_id is not None else '-'}: {eng.tick} ticks in "
+          f"{elapsed:.1f}s ({rate:.1f} ticks/s), population "
+          f"{eng.population.n_alive}, checksum {checksum[:12]}")
+    return 0
+
+
+def _cmd_reproduce(args) -> int:
+    db = ExperimentDB(args.db)
+    try:
+        record = db.run_record(args.run_id)
+    finally:
+        db.close()
+    cfg = record["config"]
+    eng = Engine(cfg)
+    started = time.perf_counter()
+    eng.run(int(cfg.ticks))
+    got = eng.checksum()
+    stored = record["end_checksum"]
+    elapsed = time.perf_counter() - started
+    if stored and got != stored:
+        print(f"reproduce MISMATCH for run {args.run_id}: stored {stored}, "
+              f"re-executed {got}", file=sys.stderr)
+        return 1
+    print(f"reproduce run {args.run_id}: checksum {got[:12]} matches "
+          f"({int(cfg.ticks)} ticks in {elapsed:.1f}s)")
+    return 0
+
+
+def _cmd_report(args) -> int:
+    db = ExperimentDB(args.db)
+    try:
+        if args.run_id is None:
+            row = db.conn.execute("SELECT MAX(id) FROM runs").fetchone()
+            if row is None or row[0] is None:
+                raise ConfigError(f"database {args.db!r} has no runs")
+            run_id = int(row[0])
+        else:
+            run_id = int(args.run_id)
+        rows = db.read_stats(run_id)
+    finally:
+        db.close()
+    if not rows:
+        raise ConfigError(f"run {run_id} has no stored statistics")
+    os.makedirs(args.out, exist_ok=True)
+    export_csv(rows, os.path.join(args.out, "stats.csv"))
+    make_plots(rows, args.out)
+    print(f"report for run {run_id}: {len(rows)} rows -> {args.out}")
+    return 0
+
+
+def _cmd_viz(args) -> int:
+    from .viz.app import launch  # lazy: pygame is an optional dependency
+    launch(_load_config(args.config))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except SnapshotVersionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

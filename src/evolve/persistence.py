@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS runs (
     ended_at TEXT,
     start_tick INTEGER NOT NULL DEFAULT 0,
     end_tick INTEGER,
-    status TEXT NOT NULL DEFAULT 'running'
+    status TEXT NOT NULL DEFAULT 'running',
+    end_checksum TEXT
 );
 {_tick_stats_ddl()}
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -200,11 +201,41 @@ class ExperimentDB:
         return int(cur.lastrowid)
 
     def finish_run(self, run_id: int, end_tick: int,
-                   status: str = "completed") -> None:
+                   status: str = "completed",
+                   checksum: str | None = None) -> None:
         self.conn.execute(
-            "UPDATE runs SET ended_at=?, end_tick=?, status=? WHERE id=?",
-            (_utcnow(), int(end_tick), status, int(run_id)))
+            "UPDATE runs SET ended_at=?, end_tick=?, status=?, end_checksum=? "
+            "WHERE id=?",
+            (_utcnow(), int(end_tick), status, checksum, int(run_id)))
         self.conn.commit()
+
+    def run_record(self, run_id: int) -> dict[str, Any]:
+        """Stored config, seed and final checksum of one run."""
+        row = self.conn.execute(
+            "SELECT e.config_yaml, e.seed, r.end_tick, r.status, r.end_checksum "
+            "FROM runs r JOIN experiments e ON e.id = r.experiment_id "
+            "WHERE r.id=?", (int(run_id),)).fetchone()
+        if row is None:
+            raise KeyError(f"no run with id {run_id}")
+        return {
+            "config": config_from_dict(yaml.safe_load(row[0]) or {}),
+            "seed": int(row[1]),
+            "end_tick": row[2],
+            "status": row[3],
+            "end_checksum": row[4],
+        }
+
+    def add_snapshot(self, run_id: int, tick: int, path: str, sha256: str,
+                     format_version: int, rng_state: bytes | None = None,
+                     manifest: Mapping[str, Any] | None = None) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO snapshots (run_id, tick, path, sha256, format_version, "
+            "rng_state, manifest_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (int(run_id), int(tick), str(path), str(sha256),
+             int(format_version), rng_state,
+             json.dumps(dict(manifest or {}), sort_keys=True)))
+        self.conn.commit()
+        return int(cur.lastrowid)
 
     def _run_config(self, run_id: int) -> Config:
         row = self.conn.execute(
@@ -312,6 +343,11 @@ class ExperimentDB:
 # ---------------------------------------------------------------------------
 SNAPSHOT_FORMAT_VERSION = 1
 
+
+class SnapshotVersionError(ValueError):
+    """The snapshot's format version is not readable by this build."""
+
+
 _ENTITY_ARRAYS = ("id", "x", "y", "biomass", "age", "alive")
 _FIELD_ARRAYS = ("terrain", "soil", "temperature", "moisture", "pheromone",
                  "plant_density", "organism_density", "_growth_factor",
@@ -413,7 +449,7 @@ def load_snapshot(path: str, config: Config):
     with np.load(path, allow_pickle=False) as z:
         version = int(z["format_version"])
         if version != SNAPSHOT_FORMAT_VERSION:
-            raise ValueError(
+            raise SnapshotVersionError(
                 f"unknown snapshot format version {version}; this build reads "
                 f"version {SNAPSHOT_FORMAT_VERSION} ({path})")
         stored_hash = str(z["config_hash"])
