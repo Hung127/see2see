@@ -147,6 +147,56 @@ class Engine:
         for _ in range(ticks):
             self.step()
 
+    def checksum(self) -> str:
+        """sha256 over the full state, floats rounded to 1e-9 (DESIGN §16.6).
+
+        Covers every array that can influence future dynamics: organisms,
+        plants, carcasses, fields, the ledger counters, the scalar counters,
+        the damage-credit map and the RNG state. Two engines with equal
+        checksums are exchangeable: resuming one and continuing the other
+        produce identical futures.
+        """
+        digest = hashlib.sha256()
+
+        def feed(name: str, value) -> None:
+            arr = np.asarray(value)
+            if arr.dtype == np.float64:
+                arr = np.round(arr, 9)
+            arr = np.ascontiguousarray(arr)
+            digest.update(name.encode("utf-8"))
+            digest.update(str(arr.dtype).encode("utf-8"))
+            digest.update(str(arr.shape).encode("utf-8"))
+            digest.update(arr.tobytes())
+
+        pop = self.population
+        for name in ("id", "x", "y", "heading", "energy", "body", "health",
+                     "age", "alive", "generation", "genome"):
+            feed(f"pop_{name}", getattr(pop, name))
+        feed("pop__next_id", np.int64(pop._next_id))
+        for prefix, obj in (("plants", self.plants), ("carc", self.carcasses)):
+            for name in ("id", "x", "y", "biomass", "age", "alive"):
+                feed(f"{prefix}_{name}", getattr(obj, name))
+            feed(f"{prefix}__next_id", np.int64(obj._next_id))
+        for name in ("terrain", "soil", "temperature", "moisture", "pheromone",
+                     "plant_density", "organism_density", "_growth_factor",
+                     "water_stress"):
+            feed(f"fields_{name}", getattr(self.fields, name))
+        for name in ("tick", "births_total", "deaths_total", "mutations_total"):
+            feed(name, np.int64(getattr(self, name)))
+        for name in ("detritus", "initial_mass", "initial_energy",
+                     "initial_soil", "initial_total"):
+            feed(name, np.float64(getattr(self, name)))
+        for name in ("light_in", "heat_out", "mass_to_soil", "mass_from_soil",
+                     "mass_in"):
+            feed(f"ledger_{name}", np.float64(getattr(self.ledger, name)))
+        credit = [(victim, attacker, amount)
+                  for victim, hits in sorted(self._damage_credit.items())
+                  for attacker, amount in hits]
+        feed("damage_credit", np.asarray(credit, dtype=np.float64)
+             if credit else np.zeros((0, 3)))
+        feed("rng_state", self.rng.state())
+        return digest.hexdigest()
+
     # -- stage 3: plants ------------------------------------------------------
     def _plants_update(self) -> None:
         self.plants.grow(self.fields, self.ledger)

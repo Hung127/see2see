@@ -22,15 +22,20 @@ always exact, independent of the interaction mode.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import subprocess
 import time
 from typing import Any, Iterable, Mapping
 
+import numpy as np
 import yaml
 
-from .config import SPEC_VERSION, Config, config_from_dict
+from .config import SPEC_VERSION, Config, config_from_dict, config_hash
+from .engine import Engine
+from .events import Event
+from .organisms import _STATE_ARRAYS as _POP_ARRAYS
 from .stats import COLUMNS
 
 #: ``tick_stats`` columns stored as SQLite INTEGER; everything else is REAL.
@@ -298,3 +303,172 @@ class ExperimentDB:
              json.dumps(dict(payload or {}), sort_keys=True)))
         self.conn.commit()
         return int(cur.lastrowid)
+
+
+# ---------------------------------------------------------------------------
+# Snapshots (DESIGN §9): compressed .npz of every state array + RNG state +
+# counters + config hash. ``format_version`` is checked on load; unknown
+# versions are refused with a clear error.
+# ---------------------------------------------------------------------------
+SNAPSHOT_FORMAT_VERSION = 1
+
+_ENTITY_ARRAYS = ("id", "x", "y", "biomass", "age", "alive")
+_FIELD_ARRAYS = ("terrain", "soil", "temperature", "moisture", "pheromone",
+                 "plant_density", "organism_density", "_growth_factor",
+                 "water_stress")
+_LEDGER_FIELDS = ("light_in", "heat_out", "mass_to_soil", "mass_from_soil",
+                  "mass_in")
+_ENGINE_INTS = ("tick", "births_total", "deaths_total", "mutations_total")
+_ENGINE_FLOATS = ("detritus", "initial_mass", "initial_energy", "initial_soil",
+                  "initial_total")
+
+
+def _canonical_sha256(payload: dict[str, Any]) -> str:
+    """Content hash over the snapshot arrays in canonical (sorted-key) order.
+
+    The .npz container itself is not byte-stable (zip entries carry timestamps),
+    so the manifest hash is computed from the arrays instead.
+    """
+    digest = hashlib.sha256()
+    for key in sorted(payload):
+        arr = np.asarray(payload[key])
+        digest.update(key.encode("utf-8"))
+        digest.update(str(arr.dtype).encode("utf-8"))
+        digest.update(str(arr.shape).encode("utf-8"))
+        digest.update(np.ascontiguousarray(arr).tobytes())
+    return digest.hexdigest()
+
+
+def _damage_credit_payload(engine) -> np.ndarray:
+    """Damage-credit map as a (victim, attacker, amount) int/float table."""
+    rows = [(victim, attacker, amount)
+            for victim, credits in sorted(engine._damage_credit.items())
+            for attacker, amount in credits]
+    if not rows:
+        return np.zeros((0, 3), dtype=np.float64)
+    return np.asarray(rows, dtype=np.float64)
+
+
+def save_snapshot(engine, path: str) -> dict[str, Any]:
+    """Write the full engine state to ``path`` (.npz) and return a manifest."""
+    payload: dict[str, Any] = {}
+
+    pop = engine.population
+    for name in _POP_ARRAYS:
+        arr = getattr(pop, name)
+        payload[f"pop_{name}"] = (np.asarray(arr, dtype="U32")
+                                  if arr.dtype == object else np.asarray(arr))
+    payload["pop_genome"] = np.asarray(pop.genome)
+    payload["pop__next_id"] = np.int64(pop._next_id)
+    payload["pop_capacity"] = np.int64(pop.capacity)
+
+    for prefix, obj in (("plants", engine.plants), ("carc", engine.carcasses)):
+        for name in _ENTITY_ARRAYS:
+            payload[f"{prefix}_{name}"] = np.asarray(getattr(obj, name))
+        payload[f"{prefix}__next_id"] = np.int64(obj._next_id)
+        payload[f"{prefix}_capacity"] = np.int64(obj.capacity)
+
+    for name in _FIELD_ARRAYS:
+        payload[f"fields_{name}"] = np.asarray(getattr(engine.fields, name))
+
+    events = engine.events._events
+    payload["ev_kind"] = np.asarray([e.kind for e in events], dtype="U32")
+    payload["ev_start"] = np.asarray([e.start_tick for e in events],
+                                     dtype=np.int64)
+    payload["ev_duration"] = np.asarray([e.duration for e in events],
+                                        dtype=np.int64)
+    payload["ev_magnitude"] = np.asarray([e.magnitude for e in events],
+                                         dtype=np.float64)
+    payload["ev_region"] = np.asarray([e.region for e in events],
+                                      dtype=np.float64).reshape(-1, 3)
+    payload["ev_fired"] = np.asarray(sorted(engine.events._fired),
+                                     dtype=np.int64)
+
+    payload["rng_state"] = np.frombuffer(engine.rng.state(), dtype=np.uint8)
+    for name in _ENGINE_INTS:
+        payload[name] = np.int64(getattr(engine, name))
+    for name in _ENGINE_FLOATS:
+        payload[name] = np.float64(getattr(engine, name))
+    for name in _LEDGER_FIELDS:
+        payload[f"ledger_{name}"] = np.float64(getattr(engine.ledger, name))
+    payload["damage_credit"] = _damage_credit_payload(engine)
+    payload["config_hash"] = np.asarray(config_hash(engine.cfg))
+    payload["spec_version"] = np.asarray(SPEC_VERSION)
+    payload["format_version"] = np.int64(SNAPSHOT_FORMAT_VERSION)
+
+    np.savez_compressed(path, **payload)
+    return {
+        "path": str(path),
+        "tick": int(engine.tick),
+        "population": int(engine.population.n_alive),
+        "format_version": SNAPSHOT_FORMAT_VERSION,
+        "spec_version": SPEC_VERSION,
+        "config_hash": config_hash(engine.cfg),
+        "sha256": _canonical_sha256(payload),
+    }
+
+
+def load_snapshot(path: str, config: Config):
+    """Rebuild an :class:`~evolve.engine.Engine` from a snapshot file."""
+    with np.load(path, allow_pickle=False) as z:
+        version = int(z["format_version"])
+        if version != SNAPSHOT_FORMAT_VERSION:
+            raise ValueError(
+                f"unknown snapshot format version {version}; this build reads "
+                f"version {SNAPSHOT_FORMAT_VERSION} ({path})")
+        stored_hash = str(z["config_hash"])
+        if stored_hash != config_hash(config):
+            raise ValueError(
+                "snapshot was written with a different configuration "
+                f"(stored {stored_hash[:12]}..., given "
+                f"{config_hash(config)[:12]}...); refusing to load")
+
+        engine = Engine(config)
+
+        pop = engine.population
+        for name in _POP_ARRAYS:
+            arr = z[f"pop_{name}"]
+            if name == "death_cause":
+                arr = np.array([str(s) for s in arr], dtype=object)
+            setattr(pop, name, arr.copy())
+        pop.genome = z["pop_genome"].copy()
+        pop._next_id = int(z["pop__next_id"])
+        pop.capacity = int(z["pop_capacity"])
+
+        for prefix, obj in (("plants", engine.plants),
+                            ("carc", engine.carcasses)):
+            for name in _ENTITY_ARRAYS:
+                setattr(obj, name, z[f"{prefix}_{name}"].copy())
+            obj._next_id = int(z[f"{prefix}__next_id"])
+            obj.capacity = int(z[f"{prefix}_capacity"])
+
+        for name in _FIELD_ARRAYS:
+            setattr(engine.fields, name, z[f"fields_{name}"].copy())
+
+        kinds = [str(k) for k in z["ev_kind"]]
+        starts = z["ev_start"]
+        durations = z["ev_duration"]
+        magnitudes = z["ev_magnitude"]
+        regions = z["ev_region"]
+        events = [Event(kinds[i], int(starts[i]), int(durations[i]),
+                        float(magnitudes[i]), tuple(float(v) for v in regions[i]))
+                  for i in range(len(kinds))]
+        engine.events._events = events
+        engine.events.log = list(events)
+        engine.events._fired = {int(i) for i in z["ev_fired"]}
+
+        engine.rng.set_state(bytes(z["rng_state"]))
+        for name in _ENGINE_INTS:
+            setattr(engine, name, int(z[name]))
+        for name in _ENGINE_FLOATS:
+            setattr(engine, name, float(z[name]))
+        for name in _LEDGER_FIELDS:
+            setattr(engine.ledger, name, float(z[f"ledger_{name}"]))
+        credit: dict[int, list[tuple[int, float]]] = {}
+        for victim, attacker, amount in z["damage_credit"]:
+            credit.setdefault(int(victim), []).append((int(attacker),
+                                                       float(amount)))
+        engine._damage_credit = credit
+
+    engine._refresh_phen()
+    return engine
