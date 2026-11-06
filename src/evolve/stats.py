@@ -203,3 +203,118 @@ def extinction_events(recorder: StatsRecorder) -> list[dict]:
     """Extinction log of a recorder (convenience accessor)."""
     return recorder.extinctions
 
+
+# ---------------------------------------------------------------------------
+# Export (DESIGN §8 outputs). Matplotlib is imported lazily so headless runs and
+# the engine never pay for it; ``viz/`` must not import this module.
+# ---------------------------------------------------------------------------
+LINEAGE_COLUMNS = ("org_id", "parent_a", "parent_b", "birth_tick", "death_tick",
+                   "generation", "cause")
+INTERACTION_COLUMNS = ("tick", "kind", "actor_id", "target_id", "amount")
+
+
+def _write_csv(columns: tuple[str, ...], rows: list[dict], path: str) -> None:
+    import csv
+
+    with open(path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(columns)
+        for row in rows:
+            writer.writerow([row.get(c, "") for c in columns])
+
+
+def export_csv(rows: list[dict], path: str) -> None:
+    """Wide stats CSV: one row per sample interval, :data:`COLUMNS` order."""
+    _write_csv(COLUMNS, rows, path)
+
+
+def export_lineage_csv(records: list[dict], path: str) -> None:
+    """Lineage table: one row per recorded organism."""
+    _write_csv(LINEAGE_COLUMNS, records, path)
+
+
+def export_interactions_csv(records: list[dict], path: str) -> None:
+    """Interaction edges: ``(tick, kind, actor_id, target_id, amount)``."""
+    _write_csv(INTERACTION_COLUMNS, records, path)
+
+
+_PLOT_NAMES = (
+    "population", "roles", "traits", "diversity", "mutation",
+    "births_deaths", "predator_prey",
+)
+
+
+def _series(rows: list[dict], key: str):
+    return [float(r.get(key, 0.0)) for r in rows]
+
+
+def make_plots(rows: list[dict], out_dir: str) -> None:
+    """Write the seven reporting PNGs into ``out_dir`` (Agg backend)."""
+    import os
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    os.makedirs(out_dir, exist_ok=True)
+    ticks = _series(rows, "tick")
+
+    def save(name: str) -> None:
+        fig = plt.gcf()
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_dir, f"{name}.png"), dpi=100)
+        plt.close(fig)
+
+    def note_if_empty(ax) -> None:
+        if not rows:
+            ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                    transform=ax.transAxes)
+
+    fig, ax = plt.subplots()
+    ax.plot(ticks, _series(rows, "population"), label="population")
+    ax.set_title("Population"); ax.set_xlabel("tick"); ax.set_ylabel("count")
+    note_if_empty(ax); save("population")
+
+    fig, ax = plt.subplots()
+    if rows:
+        ax.stackplot(ticks,
+                     _series(rows, "herbivores"), _series(rows, "omnivores"),
+                     _series(rows, "carnivores"), _series(rows, "unclassified"),
+                     labels=("herbivores", "omnivores", "carnivores", "unclassified"))
+        ax.legend(loc="upper left", fontsize=8)
+    ax.set_title("Measured roles"); ax.set_xlabel("tick"); ax.set_ylabel("count")
+    note_if_empty(ax); save("roles")
+
+    fig, ax = plt.subplots()
+    for key in ("mean_diet", "mean_body", "mean_speed", "mean_attack"):
+        ax.plot(ticks, _series(rows, key), label=key)
+    ax.set_title("Mean traits"); ax.set_xlabel("tick"); ax.legend(fontsize=8)
+    note_if_empty(ax); save("traits")
+
+    fig, ax = plt.subplots()
+    ax.plot(ticks, _series(rows, "mean_pairwise"), label="mean pairwise distance")
+    ax.plot(ticks, _series(rows, "diet_entropy"), label="diet entropy (norm.)")
+    ax.set_title("Diversity"); ax.set_xlabel("tick"); ax.legend(fontsize=8)
+    note_if_empty(ax); save("diversity")
+
+    fig, ax = plt.subplots()
+    ax.plot(ticks, _series(rows, "mean_mutation_rate"), label="mean mutation rate")
+    ax.plot(ticks, _series(rows, "mutations_per_birth"), label="mutations / birth")
+    ax.set_title("Mutation"); ax.set_xlabel("tick"); ax.legend(fontsize=8)
+    note_if_empty(ax); save("mutation")
+
+    fig, ax = plt.subplots()
+    ax.plot(ticks, _series(rows, "births"), label="births")
+    ax.plot(ticks, _series(rows, "deaths"), label="deaths")
+    ax.set_title("Births and deaths"); ax.set_xlabel("tick"); ax.legend(fontsize=8)
+    note_if_empty(ax); save("births_deaths")
+
+    fig, ax = plt.subplots()
+    if rows:
+        ax.plot(_series(rows, "herbivores"), _series(rows, "carnivores"))
+    ax.set_title("Predator–prey phase"); ax.set_xlabel("herbivores")
+    ax.set_ylabel("carnivores")
+    note_if_empty(ax); save("predator_prey")
+
+
