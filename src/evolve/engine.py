@@ -26,7 +26,7 @@ from .brain import N_PARAMS, forward
 from .config import Config
 from .energy import Ledger, assimilation, basal_cost, metabolic_cost
 from .fields import Fields
-from .genome import N_TRAITS, founders, phenotype
+from .genome import N_TRAITS, crossover, founders, mutate, phenotype
 from .organisms import Population
 from .plants import Plants
 from .rng import Rng
@@ -106,6 +106,7 @@ class Engine:
             self._move(actions)                   # 8
             self._feed(actions)                   # 9
             self._metabolise()                    # 11
+            self._reproduce(actions)              # 12
             self._mortality()                     # 13
         self._decompose()                         # 14
         self.population.compact()
@@ -255,6 +256,101 @@ class Engine:
                                 self.cfg.organisms.health_max)
         pop.health = np.maximum(pop.health, 0.0)
         pop.age += 1
+
+    # -- stage 12: reproduction ----------------------------------------------
+    def _reproduce(self, actions: Actions) -> None:
+        pop = self.population
+        if pop.n_alive == 0:
+            return
+        phen = self._phen
+        if phen.shape[0] != pop.alive.size:
+            phen = phenotype(pop.genome)
+            self._phen = phen
+        emax = 10.0 * phen[:, 0] ** 0.9
+        threshold = phen[:, 7] * emax
+        invest = phen[:, 8] * emax
+        mature = pop.age >= self.cfg.organisms.maturity_age
+        want = np.flatnonzero(actions.reproduce & mature & (pop.energy >= threshold))
+        if want.size == 0:
+            return
+        sexual = self.cfg.genetics.mode == "sexual"
+        used: set[int] = set()
+
+        for i in want:  # slot order == ascending ID (see sort_by_id)
+            if pop.n_alive >= pop.capacity:
+                break
+            if i in used:
+                continue
+            pop.repro_attempts[i] += 1.0
+            used.add(i)
+            if sexual:
+                mate = self._find_mate(i, want, used, emax, threshold)
+                if mate < 0:
+                    continue
+                used.add(mate)
+                pop.repro_attempts[mate] += 1.0
+                child_genome = crossover(pop.genome[i], pop.genome[mate], self.rng)
+                child_genome, _ = mutate(
+                    child_genome[None, :],
+                    0.5 * (phen[i, 11] + phen[mate, 11]),
+                    self.rng, self.cfg.genetics,
+                )
+                child_genome = child_genome[0]
+                generation = max(int(pop.generation[i]), int(pop.generation[mate])) + 1
+                parents = (int(pop.id[i]), int(pop.id[mate]))
+                total = invest[i]
+                share = 0.5 * total
+                ok = self._birth(i, child_genome, total, share, generation, parents)
+                if ok:
+                    pop.energy[mate] -= share
+                    pop.repro_success[mate] += 1.0
+            else:
+                child_genome, _ = mutate(
+                    pop.genome[i][None, :], phen[i, 11], self.rng, self.cfg.genetics
+                )
+                self._birth(i, child_genome[0], invest[i], invest[i],
+                            int(pop.generation[i]) + 1, (int(pop.id[i]), None))
+        # Children changed the row count; refresh the phenotype cache.
+        self._phen = phenotype(pop.genome)
+
+    def _find_mate(self, i: int, want: np.ndarray, used: set[int],
+                   emax: np.ndarray, threshold: np.ndarray) -> int:
+        pop = self.population
+        cand = np.array([j for j in want if j != i and j not in used
+                         and pop.energy[j] >= 0.5 * threshold[j]], dtype=np.int64)
+        if cand.size == 0:
+            return -1
+        reach = 3.0 * pop.body[i] ** (1.0 / 3.0)
+        d = self.world.distance(pop.x[i], pop.y[i], pop.x[cand], pop.y[cand])
+        ok = d <= reach
+        if not np.any(ok):
+            return -1
+        good = cand[ok]
+        dist = d[ok]
+        return int(good[int(np.argmin(dist))])  # ties -> first (lowest ID)
+
+    def _birth(self, parent: int, genome: np.ndarray, total_investment: float,
+               payer_share: float, generation: int,
+               parents: tuple[int, int | None]) -> bool:
+        """Attempt one birth. Gates fail with *nobody paying* (DESIGN §6.5)."""
+        pop = self.population
+        child_phen = phenotype(genome[None, :])[0]
+        body = float(child_phen[0])
+        if total_investment <= self.cfg.energy.build_cost * body:
+            return False  # cannot build a body of this size
+        if pop.energy[parent] < payer_share:
+            return False  # cannot afford the share
+        reserves = 0.9 * (total_investment - body)
+        waste = 0.1 * (total_investment - body)
+        slot = pop.add(genome, float(pop.x[parent]), float(pop.y[parent]),
+                       energy=reserves, generation=generation, parents=parents)
+        if slot < 0:
+            return False  # cap reached: parent pays nothing
+        pop.energy[parent] -= payer_share
+        pop.repro_success[parent] += 1.0
+        self.ledger.mass_to_soil += waste
+        self.ledger.heat_out += waste
+        return True
 
     # -- stage 13: mortality --------------------------------------------------
     def _mortality(self) -> None:
