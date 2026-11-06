@@ -91,8 +91,10 @@ equal random ones; it is a failure to execute the assay at that scale.
 scale 1.0 (the protocol's own scale: 20,000-tick evolution phase, 6 replicate
 seeds 100–105, 500-tick arenas at the calibrated plant density). Three
 replicates survived to sampling — 131, 705 and 181 living organisms — and three
-went extinct (seeds 100, 101, 105). The 30 arenas are therefore conditioned on
-the three surviving lineages, which is reported as part of the result.
+went extinct (seeds 100, 101, 105). DESIGN §13 expects 60 paired arenas; the
+three extinct replicates contribute none, so the run delivered 30. The result
+is therefore conditioned on the three surviving lineages, which is reported as
+part of the result.
 
 | Set | n | mean diff (evolved − random) | 95 % CI | median | W+ | z | p |
 |---|---|---|---|---|---|---|---|
@@ -203,7 +205,7 @@ machine's budget did not allow. What *is* established:
 The practical consequence for the programme: at 48 founders (scale 0.4) the
 lottery is usually lost, which is what the programme table shows; at 300
 founders it is usually won. The assay was therefore re-run at design scale
-(see §G below) rather than declared impossible.
+(see §G above) rather than declared impossible.
 
 ## Throughput (measured, all DESIGN §11 targets missed)
 
@@ -214,8 +216,7 @@ clock and was not executed in full.
 
 ## Acceptance run (DESIGN §17)
 
-Executed at commit `1967eee` (docs) plus the acceptance tests added with this
-section:
+Executed at commit `53d8b14` (the acceptance commit that carries these tests):
 
 ```
 $ python3 -m pytest -m "not slow"
