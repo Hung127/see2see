@@ -29,10 +29,9 @@ class Fields:
         self.pheromone = np.zeros(shape, dtype=np.float64)
         self.plant_density = np.zeros(shape, dtype=np.float64)
         self.organism_density = np.zeros(shape, dtype=np.float64)
-        # Per-cell additive modifiers written by events; reset each tick by apply_events.
-        self._t_offset = np.zeros(shape, dtype=np.float64)
-        self._m_offset = np.zeros(shape, dtype=np.float64)
+        # Per-cell event modifiers; reset each tick by step(), re-applied by Events.
         self._growth_factor = np.ones(shape, dtype=np.float64)
+        self.water_stress = np.zeros(shape, dtype=np.float64)
 
     # -- terrain -------------------------------------------------------------
     def _terrain_from_noise(self, shape: tuple[int, int]) -> np.ndarray:
@@ -61,8 +60,9 @@ class Fields:
             rain = (self.rng.random((self.n, self.n)) < self.cfg.rain_rate).astype(np.float64)
             moisture = moisture + 0.02 * rain
 
-        self.temperature = np.clip(temp + self._t_offset, -30.0, 60.0)
-        self.moisture = np.clip(moisture + self._m_offset, 0.0, 1.0)
+        shape = (self.n, self.n)
+        self.temperature = np.clip(np.broadcast_to(temp, shape), -30.0, 60.0)
+        self.moisture = np.clip(np.broadcast_to(moisture, shape), 0.0, 1.0)
 
         # Pheromone: 5-point diffusion then exponential decay.
         p = self.pheromone
@@ -72,10 +72,9 @@ class Fields:
                        + np.roll(p, 1, 1) + np.roll(p, -1, 1))
         )
         self.soil = np.maximum(self.soil, 0.0)
-        # Event modifiers last exactly one tick; events re-apply them every tick they run.
-        self._t_offset.fill(0.0)
-        self._m_offset.fill(0.0)
+        # Event modifiers last exactly one tick; Events re-applies them every tick.
         self._growth_factor.fill(1.0)
+        self.water_stress.fill(0.0)
 
     # -- sampling ------------------------------------------------------------
     def cell_index(self, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -93,6 +92,7 @@ class Fields:
             "plant_density": self.plant_density[ix, iy],
             "organism_density": self.organism_density[ix, iy],
             "pheromone": self.pheromone[ix, iy],
+            "water_stress": self.water_stress[ix, iy],
         }
 
     def add_pheromone(self, x: np.ndarray, y: np.ndarray, amount: np.ndarray | float) -> None:

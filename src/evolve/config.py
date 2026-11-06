@@ -117,6 +117,8 @@ class EnvironmentConfig:
     season_period: int = 2000
     rain_rate: float = 0.002
     events: tuple[EventConfig, ...] = ()
+    # Random events: (kind, expected events per tick); spawned by Poisson draws.
+    random_events: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)

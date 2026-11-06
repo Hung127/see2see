@@ -104,7 +104,8 @@ class Plants:
         moisture = fields.moisture[ix, iy]
         f_t = np.exp(-((temp - 22.0) / 8.0) ** 2)
         f_m = 0.3 + 0.7 * moisture
-        demand = cfg.r * p * np.maximum(0.0, 1.0 - p / k_local) * f_t * f_m
+        f_event = fields.growth_factor()[ix, iy]
+        demand = cfg.r * p * np.maximum(0.0, 1.0 - p / k_local) * f_t * f_m * f_event
 
         soil = fields.soil.reshape(-1)
         total_demand = np.bincount(cell, weights=demand, minlength=n * n)

@@ -47,5 +47,5 @@ def test_sample_returns_cell_values():
     f = make_fields()
     vals = f.sample(np.array([5.0]), np.array([5.0]))
     assert set(vals) == {"temperature", "moisture", "soil", "terrain", "plant_density",
-                         "organism_density", "pheromone"}
+                         "organism_density", "pheromone", "water_stress"}
     assert vals["temperature"].shape == (1,)

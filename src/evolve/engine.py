@@ -26,6 +26,7 @@ from .brain import N_PARAMS, forward
 from .carcasses import Carcasses
 from .config import Config
 from .energy import Ledger, assimilation, basal_cost, metabolic_cost, strike_damage
+from .events import Events
 from .fields import Fields
 from .genome import N_TRAITS, crossover, founders, mutate, phenotype
 from .organisms import Population
@@ -48,6 +49,7 @@ class Engine:
         self.world = World(config.world)
         self.fields = Fields(config.world, config.environment, self.rng)
         self.fields.step(0)
+        self.events = Events(config.environment, self.fields, self.rng)
         self.population = Population(config.organisms)
         self.plants = Plants(config.plants, config.world)
         self.carcasses = Carcasses()
@@ -104,6 +106,7 @@ class Engine:
     def step(self) -> None:
         self.tick += 1
         self.fields.step(self.tick)               # 2 environment
+        self.events.update(self.tick, self)       # 2b events (physical effects only)
         self._plants_update()                     # 3 plants
         self.population.compact()                 # 4 dense slots
         self.population.sort_by_id()              # 4 deterministic tie order
@@ -383,10 +386,13 @@ class Engine:
     # -- stage 11: metabolism -------------------------------------------------
     def _metabolise(self) -> None:
         pop = self.population
-        phen = self._phen
-        temp = self.fields.sample(pop.x, pop.y)["temperature"]
+        phen = self._refresh_phen()
+        env = self.fields.sample(pop.x, pop.y)
+        temp = env["temperature"]
         basal = basal_cost(phen, self.cfg.energy)
-        cost = metabolic_cost(phen, self._speed, temp, self.cfg.energy)
+        # Drought water stress (DESIGN §3.3): extra cost 0.5 * C_basal * m.
+        cost = metabolic_cost(phen, self._speed, temp, self.cfg.energy) \
+            + basal * 0.5 * env["water_stress"]
 
         paid = np.minimum(cost, pop.energy)
         pop.energy -= paid
