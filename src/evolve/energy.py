@@ -96,6 +96,12 @@ def metabolic_cost(phen: np.ndarray, speed: np.ndarray, temp: np.ndarray,
     return basal + repair + brain + move + vision + attack + defense + enzyme + thermal
 
 
+def basal_cost(phen: np.ndarray, cfg: EnergyConfig = DEFAULT_CFG) -> np.ndarray:
+    """``C_basal = k_b · M^0.75 · metabolic_rate`` (the regen gate uses 2·C_basal)."""
+    phen = np.atleast_2d(np.asarray(phen, dtype=np.float64))
+    return cfg.k_b * phen[:, 0] ** 0.75 * phen[:, 4]
+
+
 def assimilation(eta_base: float, diet: np.ndarray, rate: np.ndarray,
                  *, plant: bool) -> np.ndarray:
     """Digestive efficiency on one food item (DESIGN §6.3).

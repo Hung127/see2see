@@ -78,6 +78,7 @@ class EnergyConfig:
     repro_eff: float = 0.9
     decay: float = 0.015
     catabolism: float = 0.5
+    starvation_health_loss: float = 1.0
 
 
 @dataclass(frozen=True)

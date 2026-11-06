@@ -4,7 +4,7 @@ import pytest
 
 from evolve.config import EnergyConfig
 from evolve.energy import (
-    Ledger, assimilation, feed, metabolic_cost, respiration, strike_damage,
+    Ledger, assimilation, basal_cost, feed, metabolic_cost, respiration, strike_damage,
 )
 
 CFG = EnergyConfig()
@@ -36,6 +36,11 @@ def test_metabolic_cost_terms():
     assert moving - base == pytest.approx(CFG.k_m * 1.0 * 1.0)
     warm = metabolic_cost(p, np.array([0.0]), np.array([30.0]))[0]
     assert warm > base
+
+
+def test_basal_cost():
+    p = phen_row(size=2.0, rate=1.2)
+    assert basal_cost(p, CFG)[0] == pytest.approx(CFG.k_b * 2.0 ** 0.75 * 1.2)
 
 
 def test_attack_defense_and_enzyme_costs():

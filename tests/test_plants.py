@@ -62,6 +62,7 @@ def test_growth_paid_from_soil_and_light():
     assert grew > 0.0
     assert float(fields.soil[ix, iy]) == pytest.approx(before_soil - grew, rel=1e-12)
     assert led.light_in == pytest.approx(grew, rel=1e-12)
+    assert led.mass_from_soil == pytest.approx(grew, rel=1e-12)
 
 
 def test_contention_proportional():
@@ -92,6 +93,7 @@ def test_germination_costs_soil_and_light():
     assert plants.n_alive == 1 + made
     assert float(fields.soil[ix, iy]) == pytest.approx(0.0, abs=1e-12)
     assert led.light_in == pytest.approx(0.2 * made)
+    assert led.mass_from_soil == pytest.approx(0.2 * made)
 
 
 def test_germination_respects_capacity():

@@ -4,6 +4,11 @@ The arrays are the authoritative state; :class:`OrganismView` is a frozen snapsh
 inspection, statistics and persistence. Slots are recycled deterministically (first
 dead slot wins) and ``compact()`` removes dead slots with a stable remap so organism
 IDs stay monotonic and never change meaning.
+
+``body`` is the organism's *actual* structural biomass (initialised from the genome's
+body-size phenotype). It can shrink under starvation catabolism; the genome remains
+the developmental target. Mass and energy stocks of an organism are both ``body + E``
+in biomass-energy units (DESIGN §6.1).
 """
 from __future__ import annotations
 
@@ -25,6 +30,7 @@ class OrganismView:
     y: float
     heading: float
     energy: float
+    body: float
     health: float
     age: int
     alive: bool
@@ -41,6 +47,11 @@ _COUNTERS = (
     "rest_ticks", "plant_intake", "meat_intake", "damage_taken",
 )
 
+_STATE_ARRAYS = (
+    "id", "x", "y", "heading", "energy", "body", "health", "age", "alive",
+    "generation", "parent_a", "parent_b", "death_cause", *_COUNTERS,
+)
+
 
 class Population:
     """SoA of organisms with deterministic slot management."""
@@ -48,14 +59,15 @@ class Population:
     def __init__(self, cfg: OrganismConfig, capacity: int | None = None) -> None:
         self.cfg = cfg
         self.capacity = int(capacity if capacity is not None else cfg.max)
-        n = self.capacity
-        self.id = np.arange(n, dtype=np.int64)
+        n = min(self.capacity, 64)
         self._next_id = 0
+        self.id = np.zeros(n, dtype=np.int64)
         self.genome = np.zeros((n, N_GENES), dtype=np.float64)
         self.x = np.zeros(n, dtype=np.float64)
         self.y = np.zeros(n, dtype=np.float64)
         self.heading = np.zeros(n, dtype=np.float64)
         self.energy = np.zeros(n, dtype=np.float64)
+        self.body = np.zeros(n, dtype=np.float64)
         self.health = np.full(n, cfg.health_max, dtype=np.float64)
         self.age = np.zeros(n, dtype=np.int64)
         self.alive = np.zeros(n, dtype=bool)
@@ -75,13 +87,14 @@ class Population:
             generation: int = 0, parents: tuple[int | None, int | None] = (None, None)) -> int:
         """Insert an organism; returns its slot index, or -1 when the cap is reached."""
         dead = np.flatnonzero(~self.alive)
-        if dead.size == 0:
-            if self.alive.size >= self.capacity:
-                return -1
-            self._grow()
-            slot = self.alive.size - 1
-        else:
+        if dead.size:
             slot = int(dead[0])
+        elif self.alive.size < self.capacity:
+            old = self.alive.size
+            self._grow()
+            slot = old
+        else:
+            return -1
         self.alive[slot] = True
         self.id[slot] = self._next_id
         self._next_id += 1
@@ -90,6 +103,7 @@ class Population:
         self.y[slot] = y
         self.heading[slot] = 0.0
         self.energy[slot] = energy
+        self.body[slot] = float(phenotype(genome[None, :])[0, 0])
         self.health[slot] = self.cfg.health_max
         self.age[slot] = 0
         self.generation[slot] = generation
@@ -107,14 +121,23 @@ class Population:
     def compact(self) -> None:
         """Drop dead slots (stable remap; IDs are never renumbered)."""
         keep = np.flatnonzero(self.alive)
-        dropped = self.alive.size - keep.size
-        if dropped == 0:
+        if keep.size == self.alive.size:
             return
-        for name in ("id", "genome", "x", "y", "heading", "energy", "health", "age",
-                     "alive", "generation", "parent_a", "parent_b", "death_cause",
-                     *_COUNTERS):
+        for name in _STATE_ARRAYS:
             setattr(self, name, getattr(self, name)[keep])
-        self._grow_to(self.capacity)
+        self.genome = self.genome[keep]
+
+    def sort_by_id(self) -> None:
+        """Order live rows by ascending ID (the deterministic tie-break contract)."""
+        n = self.alive.size
+        if n < 2:
+            return
+        order = np.argsort(self.id, kind="stable")
+        if np.array_equal(order, np.arange(n)):
+            return
+        for name in _STATE_ARRAYS:
+            setattr(self, name, getattr(self, name)[order])
+        self.genome = self.genome[order]
 
     def _grow(self) -> None:
         self._grow_to(min(self.capacity, max(self.alive.size * 2, 64)))
@@ -123,11 +146,12 @@ class Population:
         if n <= self.alive.size:
             return
         old = self.alive.size
-        for name in ("id", "x", "y", "heading", "energy", "health", "age", "alive",
-                     "generation", "parent_a", "parent_b", "death_cause", *_COUNTERS):
+        for name in _STATE_ARRAYS:
             arr = getattr(self, name)
-            fill = np.zeros(n - old, dtype=arr.dtype) if arr.dtype != object else np.full(
-                n - old, "", dtype=object)
+            if arr.dtype == object:
+                fill = np.full(n - old, "", dtype=object)
+            else:
+                fill = np.zeros(n - old, dtype=arr.dtype)
             setattr(self, name, np.concatenate([arr, fill]))
         genome = np.zeros((n, N_GENES), dtype=np.float64)
         genome[:old] = self.genome
@@ -146,6 +170,7 @@ class Population:
             y=float(self.y[i]),
             heading=float(self.heading[i]),
             energy=float(self.energy[i]),
+            body=float(self.body[i]),
             health=float(self.health[i]),
             age=int(self.age[i]),
             alive=bool(self.alive[i]),

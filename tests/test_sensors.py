@@ -1,6 +1,4 @@
 """Tests for the 16-channel phenotype-based sensor vector."""
-import sys
-
 import numpy as np
 import pytest
 
@@ -119,5 +117,10 @@ def test_normalisation_bounds():
 
 
 def test_sensors_do_not_import_actions():
-    import evolve.sensors  # noqa: F401
-    assert "evolve.actions" not in sys.modules
+    import inspect
+
+    import evolve.sensors as sensors
+    src = inspect.getsource(sensors)
+    imports = [ln for ln in src.splitlines()
+               if ln.strip().startswith(("import ", "from "))]
+    assert not any("actions" in ln for ln in imports)

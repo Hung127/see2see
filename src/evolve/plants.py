@@ -135,6 +135,7 @@ class Plants:
         soil -= taken
         led_light = float(growth.sum())
         ledger.light_in += led_light
+        ledger.mass_from_soil += led_light
         return led_light
 
     # -- germination ----------------------------------------------------------
@@ -169,6 +170,7 @@ class Plants:
                 break
             soil[c] -= self.cfg.seed_cost
             ledger.light_in += self.cfg.seed_cost
+            ledger.mass_from_soil += self.cfg.seed_cost
             made += 1
         return made
 
