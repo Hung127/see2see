@@ -71,6 +71,15 @@ class Fields:
             + 0.125 * (np.roll(p, 1, 0) + np.roll(p, -1, 0)
                        + np.roll(p, 1, 1) + np.roll(p, -1, 1))
         )
+        # Soil percolation: symmetric 5-point mixing, exactly mass conserving
+        # (wrap-around boundaries, kernel weights sum to 1).
+        a = float(self.cfg.soil_diffusion)
+        if a > 0.0:
+            s = self.soil
+            self.soil = (1.0 - a) * s + 0.25 * a * (
+                np.roll(s, 1, 0) + np.roll(s, -1, 0)
+                + np.roll(s, 1, 1) + np.roll(s, -1, 1)
+            )
         self.soil = np.maximum(self.soil, 0.0)
         # Event modifiers last exactly one tick; Events re-applies them every tick.
         self._growth_factor.fill(1.0)

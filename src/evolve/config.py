@@ -20,11 +20,15 @@ INTERACTION_MODES = ("off", "sampled", "full")
 
 @dataclass(frozen=True)
 class WorldConfig:
-    width: float = 2000.0
-    height: float = 2000.0
+    """Calibrated defaults (docs/CALIBRATION.md): 1000x1000 supports a
+    non-extinct plant-herbivore equilibrium on this machine's compute budget;
+    the original 2000x2000 could not carry enough plant biomass to feed the
+    founders at any tested bite rate."""
+    width: float = 1000.0
+    height: float = 1000.0
     boundaries: str = "wrap"
     n_field_cells: int = 40
-    cell_size: float = 50.0
+    cell_size: float = 25.0
 
     def __post_init__(self) -> None:
         if self.boundaries not in BOUNDARY_MODES:
@@ -37,8 +41,10 @@ class WorldConfig:
 
 @dataclass(frozen=True)
 class PlantConfig:
-    initial: int = 1500
-    max: int = 5000
+    """Calibrated defaults (docs/CALIBRATION.md): plant density 6e-3/unit^2 is
+    the minimum at which foragers make enough contacts to break even."""
+    initial: int = 6000
+    max: int = 20000
     k0: float = 5.0
     r: float = 0.06
     seed_cost: float = 0.2
@@ -49,7 +55,7 @@ class PlantConfig:
 @dataclass(frozen=True)
 class OrganismConfig:
     initial: int = 300
-    max: int = 5000
+    max: int = 2000
     maturity_age: int = 50
     health_max: float = 100.0
     health_regen: float = 0.05
@@ -67,9 +73,9 @@ class EnergyConfig:
     k_a: float = 0.004
     k_d: float = 0.003
     k_e: float = 0.004
-    eta_p: float = 0.65
+    eta_p: float = 0.75
     eta_m: float = 0.85
-    bite: float = 0.10
+    bite: float = 0.50
     strike_cost: float = 0.05
     k_dmg: float = 3.0
     k_mit: float = 1.5
@@ -116,6 +122,10 @@ class EnvironmentConfig:
     m_amp: float = 0.15
     season_period: int = 2000
     rain_rate: float = 0.002
+    # Soil percolation: per-tick fraction exchanged with the 4-neighbour mean.
+    # Nutrients deposited where organisms respire must not stay stranded away
+    # from plant roots, or plants starve on a global surplus (CALIBRATION.md).
+    soil_diffusion: float = 0.10
     events: tuple[EventConfig, ...] = ()
     # Random events: (kind, expected events per tick); spawned by Poisson draws.
     random_events: tuple[tuple[str, float], ...] = ()

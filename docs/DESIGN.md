@@ -112,6 +112,11 @@ read-only facade used by the UI, statistics detail views and snapshot export.
 `plant_density (bu/cell, derived from plant entities)`, `organism_density (count/cell, derived)`,
 `threat_pheromone [0,1]` (diffusing, decaying).
 
+Soil nutrient percolates between neighbouring cells (symmetric 5-point mixing,
+`soil_diffusion = 0.10` per tick, mass-conserving). Without transport, nutrients
+respired in one cell strand away from plant roots and plants starve on a global
+surplus; this was found by the calibration harness (docs/CALIBRATION.md §4).
+
 Terrain is generated once from smoothed value noise (seeded) and then fixed. Height sets each cell's
 initial soil nutrient, its plant carrying-capacity multiplier (§6.7) and flood damage; it is *not* a
 per-tick force. Floods therefore hit low ground repeatedly, which is a persistent environmental
@@ -680,6 +685,14 @@ satisfy mechanistic criteria: the ledgers close, a non-trivial fraction of found
 maturity, and the plant–herbivore system has a non-extinct equilibrium in at least one
 parameterisation. After the freeze, any constant change requires re-running every experiment, and
 the change is recorded in the config history shipped with the results.
+
+**Calibration outcome (recorded after M6).** The window above was not actually
+closed during M1–M2: the balance harness had never been run, and the originally
+shipped constants failed the founder-viability criterion. It was run late, in full,
+and the result is `docs/CALIBRATION.md`. Adopted defaults: world 1000×1000, plants
+6000 (max 20000), organisms 300 (max 2000), `bite = 0.50`, `eta_p = 0.75`, plus
+mass-conserving soil percolation (DESIGN §3.2). The original constants are reported
+there as a negative result; they are not silently deleted.
 
 **What calibration may never do.** Change a parameter in response to a *specific experiment's*
 outcome to make that experiment "work"; raise energy inputs to rescue a dying population; add a
