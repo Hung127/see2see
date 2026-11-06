@@ -59,6 +59,9 @@ class Engine:
         self._damage_credit: dict[int, list[tuple[int, float]]] = {}
         self.ledger = Ledger()
         self.detritus = 0.0
+        self.births_total = 0
+        self.deaths_total = 0
+        self.mutations_total = 0
         self.tick = 0
         self.stats = None  # wired to StatsRecorder in Task 18
         self.last_sensors = np.zeros((0, 16))
@@ -394,6 +397,7 @@ class Engine:
             pop.energy[v] = 0.0
             pop.alive[v] = False
             pop.death_cause[v] = "predation"
+            self.deaths_total += 1
 
     # -- stage 11: metabolism -------------------------------------------------
     def _metabolise(self) -> None:
@@ -467,11 +471,12 @@ class Engine:
                 used.add(mate)
                 pop.repro_attempts[mate] += 1.0
                 child_genome = crossover(pop.genome[i], pop.genome[mate], self.rng)
-                child_genome, _ = mutate(
+                child_genome, n_mut = mutate(
                     child_genome[None, :],
                     0.5 * (phen[i, 11] + phen[mate, 11]),
                     self.rng, self.cfg.genetics,
                 )
+                self.mutations_total += int(n_mut.sum())
                 child_genome = child_genome[0]
                 generation = max(int(pop.generation[i]), int(pop.generation[mate])) + 1
                 parents = (int(pop.id[i]), int(pop.id[mate]))
@@ -482,9 +487,10 @@ class Engine:
                     pop.energy[mate] -= share
                     pop.repro_success[mate] += 1.0
             else:
-                child_genome, _ = mutate(
+                child_genome, n_mut = mutate(
                     pop.genome[i][None, :], phen[i, 11], self.rng, self.cfg.genetics
                 )
+                self.mutations_total += int(n_mut.sum())
                 self._birth(i, child_genome[0], invest[i], invest[i],
                             int(pop.generation[i]) + 1, (int(pop.id[i]), None))
         # Children changed the row count; refresh the phenotype cache.
@@ -525,6 +531,7 @@ class Engine:
             return False  # cap reached: parent pays nothing
         pop.energy[parent] -= payer_share
         pop.repro_success[parent] += 1.0
+        self.births_total += 1
         bix, biy = self.fields.cell_index(np.array([pop.x[parent]]),
                                           np.array([pop.y[parent]]))
         np.add.at(self.fields.soil, (bix, biy), waste)
@@ -558,6 +565,7 @@ class Engine:
         pop.body[dead] = 0.0
         pop.energy[dead] = 0.0
         pop.alive[dead] = False
+        self.deaths_total += int(dead.sum())
         cause = np.where(starved[dead], "starvation",
                          np.where(old_age[dead], "senescence", "health"))
         pop.death_cause[dead] = cause
