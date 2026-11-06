@@ -118,7 +118,13 @@ class Engine:
         return self.mass_stock() + self.soil_stock()
 
     # -- tick -----------------------------------------------------------------
-    def step(self) -> None:
+    def step(self, *, reproduce: bool = True, predation: bool = True) -> None:
+        """One tick.
+
+        ``reproduce`` and ``predation`` exist only as experiment controls (the
+        assay arena removes both processes); their defaults are the full model.
+        They are not behavioural hooks: no organism decision depends on them.
+        """
         self.tick += 1
         self.fields.step(self.tick)               # 2 environment
         self.events.update(self.tick, self)       # 2b events (physical effects only)
@@ -129,9 +135,11 @@ class Engine:
         if actions is not None and self.population.n_alive:
             self._move(actions)                   # 8
             self._feed(actions)                   # 9
-            self._predation(actions)              # 10
+            if predation:
+                self._predation(actions)          # 10
             self._metabolise()                    # 11
-            self._reproduce(actions)              # 12
+            if reproduce:
+                self._reproduce(actions)          # 12
             self._mortality()                     # 13
         self._decompose()                         # 14
         self.population.compact()

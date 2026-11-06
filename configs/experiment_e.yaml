@@ -1,0 +1,17 @@
+# Experiment E -- environmental shift (DESIGN §13).
+# At tick 15,000 the world warms by +8 C for the rest of the run (heatwave,
+# magnitude 0.8) and the soil nutrients of the right half are moved onto the
+# left half (runner hook `move_nutrients`, mass-preserving). Readouts:
+# migration, trait shift, extinction risk.
+seed: 5
+ticks: 30000
+
+world: {width: 1000.0, height: 1000.0, n_field_cells: 40, cell_size: 25.0}
+plants: {initial: 6000, max: 20000}
+organisms: {initial: 300, max: 2000}
+energy: {bite: 0.5, eta_p: 0.75}
+genetics: {mode: asexual}
+environment:
+  events:
+    - {kind: heatwave, start_tick: 15000, duration: 15000, magnitude: 0.8}
+stats: {interval: 50, interactions: sampled}

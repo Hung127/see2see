@@ -1,0 +1,17 @@
+# Experiment C -- severe drought (DESIGN §13).
+# A drought from tick 500 for 600 ticks at magnitude 0.6. With the implemented
+# drought effect that is moisture x(1-0.6) = -60 % but plant growth
+# x(1-0.8*0.6) = -48 %, not the design's -70 %; the gap is documented in
+# docs/EXPERIMENTS.md and docs/RESULTS.md rather than forced.
+seed: 3
+ticks: 3000
+
+world: {width: 1000.0, height: 1000.0, n_field_cells: 40, cell_size: 25.0}
+plants: {initial: 6000, max: 20000}
+organisms: {initial: 300, max: 2000}
+energy: {bite: 0.5, eta_p: 0.75, water_stress_cost: 2.0}
+genetics: {mode: asexual}
+environment:
+  events:
+    - {kind: drought, start_tick: 500, duration: 600, magnitude: 0.6}
+stats: {interval: 20, interactions: sampled}

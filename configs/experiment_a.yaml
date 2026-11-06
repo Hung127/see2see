@@ -1,0 +1,13 @@
+# Experiment A -- stable ecosystem (DESIGN §13).
+# No manipulation: the calibrated default is run for 30,000 ticks. Readouts:
+# population stability, role mix, trait drift.
+seed: 1
+ticks: 30000
+
+world: {width: 1000.0, height: 1000.0, n_field_cells: 40, cell_size: 25.0}
+plants: {initial: 6000, max: 20000}
+organisms: {initial: 300, max: 2000}
+energy: {bite: 0.5, eta_p: 0.75}
+genetics: {mode: asexual}
+environment: {}
+stats: {interval: 50, interactions: sampled}

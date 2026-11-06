@@ -1,0 +1,14 @@
+# Experiment D -- resource competition (DESIGN §13).
+# Plants reduced to 40 % of the A baseline and clustered (setup hook
+# `clumped_plants`); 1,000 ticks of regrowth. Readouts: diet breadth,
+# foraging efficiency, coexistence.
+seed: 4
+ticks: 1000
+
+world: {width: 1000.0, height: 1000.0, n_field_cells: 40, cell_size: 25.0}
+plants: {initial: 2400, max: 8000}
+organisms: {initial: 300, max: 2000}
+energy: {bite: 0.5, eta_p: 0.75}
+genetics: {mode: asexual}
+environment: {}
+stats: {interval: 20, interactions: sampled}

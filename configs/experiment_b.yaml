@@ -1,0 +1,14 @@
+# Experiment B -- predator pressure (DESIGN §13).
+# On top of the A baseline, the runner adds 200 carnivore-biased founders with
+# diet_preference = 0.85 at t = 0 (setup hook `carnivore_founders`). Readouts:
+# prey population, prey size/speed/defence, hunt success.
+seed: 2
+ticks: 30000
+
+world: {width: 1000.0, height: 1000.0, n_field_cells: 40, cell_size: 25.0}
+plants: {initial: 6000, max: 20000}
+organisms: {initial: 300, max: 2000}
+energy: {bite: 0.5, eta_p: 0.75}
+genetics: {mode: asexual}
+environment: {}
+stats: {interval: 50, interactions: sampled}

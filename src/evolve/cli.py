@@ -8,10 +8,8 @@ Subcommands:
 * ``report``     — CSV + plots for a stored run;
 * ``viz``        — the pygame application (imported lazily so the CLI works
   without pygame installed);
-* ``benchmark``  — measure headless throughput at a given population.
-
-``experiments`` is added by Task 26, when its module exists (stubs are not
-acceptable).
+* ``benchmark``  — measure headless throughput at a given population;
+* ``experiments``— run the DESIGN §13 scenarios (scaled down by default).
 
 Exit codes: 0 success, 2 configuration error, 3 snapshot version error.
 Unexpected runtime errors are not swallowed: they print a traceback and exit 1.
@@ -84,6 +82,29 @@ def _parser() -> argparse.ArgumentParser:
     bench.add_argument("--profile", action="store_true",
                        help="print a cProfile top-10 table for the same point")
     bench.set_defaults(func=_cmd_benchmark)
+
+    exp = sub.add_parser("experiments", help="run DESIGN §13 experiments")
+    exp.add_argument("--id", default="all",
+                     choices=["all", "a", "b", "c", "d", "e", "f", "g", "h"])
+    exp.add_argument("--all", action="store_true",
+                     help="run every experiment (same as --id all)")
+    exp.add_argument("--out", required=True, help="output directory")
+    exp.add_argument("--scale", type=float, default=None,
+                     help=f"area/time multiplier (default "
+                          f"{0.5}; --full is equivalent to 1.0)")
+    exp.add_argument("--full", action="store_true",
+                     help="run at design scale (area and horizon x1; ~7.5 h)")
+    exp.add_argument("--ticks", type=int, default=None,
+                     help="override the scaled horizon")
+    exp.add_argument("--seed", type=int, default=None,
+                     help="override the base seed (assay replicates use +i)")
+    exp.add_argument("--replicates", type=int, default=6,
+                     help="assay evolution replicates")
+    exp.add_argument("--samples", type=int, default=10,
+                     help="genomes sampled per assay replicate")
+    exp.add_argument("--arena-ticks", type=int, default=None,
+                     help="assay arena horizon (default: 500 x scale)")
+    exp.set_defaults(func=_cmd_experiments)
     return p
 
 
@@ -208,6 +229,39 @@ def _cmd_benchmark(args) -> int:
           f"(mean population {result['mean_population']})")
     if args.profile:
         print(profile_point(args.population, args.ticks))
+    return 0
+
+
+def _cmd_experiments(args) -> int:
+    from .experiments import DEFAULT_SCALE, run_all, run_assay, run_scenario
+
+    scale = 1.0 if args.full else (args.scale if args.scale is not None
+                                   else DEFAULT_SCALE)
+    experiment_id = "all" if args.all else args.id
+    if experiment_id == "all":
+        results = run_all(args.out, scale=scale, ticks=args.ticks,
+                          assay_replicates=args.replicates,
+                          assay_samples=args.samples,
+                          assay_arena_ticks=args.arena_ticks)
+        g = results["g"]["pooled"]
+        print(f"experiments complete: scale {scale}, assay pooled diff "
+              f"{g['mean']:+.4f} bu (p = {g['p']:.4f}, n = {g['n']}) "
+              f"-> {args.out}")
+        return 0
+    if experiment_id == "g":
+        result = run_assay(args.out, scale=scale, replicates=args.replicates,
+                           samples=args.samples, ticks=args.ticks,
+                           arena_ticks=args.arena_ticks)
+        pooled = result["pooled"]
+        print(f"assay: {pooled['n']} paired arenas, mean diff "
+              f"{pooled['mean']:+.4f} bu, Wilcoxon p = {pooled['p']:.4f} "
+              f"-> {args.out}")
+        return 0
+    result = run_scenario(experiment_id, args.out, scale=scale,
+                          ticks=args.ticks, seed=args.seed)
+    print(f"experiment {experiment_id}: {result['ticks']} ticks, final "
+          f"population {result['final_population']}, "
+          f"extinct = {result['extinct']} -> {args.out}")
     return 0
 
 

@@ -1,0 +1,15 @@
+# Experiment H -- sexual reproduction (DESIGN §13).
+# 1,000 founders over a world large enough to keep the A density (1,826 x 1,826
+# units, 20,000 plants), mode = sexual. The runner also executes an asexual
+# control at the same density and the same seed, so the two arms differ only in
+# the reproductive mode.
+seed: 8
+ticks: 30000
+
+world: {width: 1826.0, height: 1826.0, n_field_cells: 73, cell_size: 25.0}
+plants: {initial: 20000, max: 60000}
+organisms: {initial: 1000, max: 4000}
+energy: {bite: 0.5, eta_p: 0.75}
+genetics: {mode: sexual}
+environment: {}
+stats: {interval: 50, interactions: sampled}

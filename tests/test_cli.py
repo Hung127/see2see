@@ -1,4 +1,6 @@
 """Command-line interface tests (exit codes, headless run, reproduce)."""
+import os
+
 import numpy as np
 import pytest
 import yaml
@@ -79,6 +81,14 @@ def test_bad_config_exit_code(tmp_path):
 
 def test_benchmark_smoke():
     assert main(["benchmark", "--population", "20", "--ticks", "5"]) == 0
+
+
+def test_experiments_subcommand_smoke(tmp_path):
+    out = str(tmp_path / "exp")
+    assert main(["experiments", "--id", "c", "--out", out, "--scale", "0.2",
+                 "--ticks", "10"]) == 0
+    assert os.path.exists(os.path.join(out, "summary.md"))
+    assert os.path.exists(os.path.join(out, "stats.csv"))
 
 
 def test_snapshot_version_exit_code(tmp_path):
