@@ -402,6 +402,46 @@ class Engine:
         self.fields.organism_density[:] = counts.reshape(n, n)
 
     # -- reproducibility ------------------------------------------------------
+    def inspect(self, i: int) -> dict:
+        """Full behavioural payload for one organism (slot index).
+
+        ``sensors``/``outputs`` are the last computed vectors; rows align with
+        slot order at think time (arrays are compacted before sensing).
+        """
+        from .brain import split as split_weights
+
+        pop = self.population
+        genome = pop.genome[i]
+        W1, b1, W2, b2, W3, b3 = split_weights(genome[None, N_TRAITS:])
+        parents = (
+            int(pop.parent_a[i]) if pop.parent_a[i] >= 0 else None,
+            int(pop.parent_b[i]) if pop.parent_b[i] >= 0 else None,
+        )
+        row = i if i < self.last_sensors.shape[0] else None
+        return {
+            "id": int(pop.id[i]),
+            "age": int(pop.age[i]),
+            "energy": float(pop.energy[i]),
+            "body": float(pop.body[i]),
+            "health": float(pop.health[i]),
+            "generation": int(pop.generation[i]),
+            "parents": parents,
+            "position": (float(pop.x[i]), float(pop.y[i])),
+            "heading": float(pop.heading[i]),
+            "phenotypes": phenotype(genome[None, :])[0],
+            "weights": {"W1": W1[0], "b1": b1[0], "W2": W2[0], "b2": b2[0],
+                        "W3": W3[0], "b3": b3[0]},
+            "sensors": self.last_sensors[row].copy() if row is not None
+                       else np.zeros(16),
+            "outputs": self.last_outputs[row].copy() if row is not None
+                       else np.zeros(8),
+            "counters": {name: float(getattr(pop, name)[i])
+                         for name in ("dist_moved", "bites", "hunts", "escapes",
+                                      "repro_attempts", "repro_success",
+                                      "rest_ticks", "plant_intake", "meat_intake",
+                                      "damage_taken")},
+        }
+
     def checksum(self) -> str:
         """SHA-256 over rounded state; independent instances with equal state agree."""
         h = hashlib.sha256()
