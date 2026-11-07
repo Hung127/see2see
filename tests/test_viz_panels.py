@@ -493,6 +493,37 @@ def test_resize_keeps_the_world_fitted_until_the_user_zooms():
     assert app.camera.zoom == z
 
 
+def test_sparkline_never_reports_zero_beside_a_live_population():
+    """A paused first frame has no samples; it must still show the real count.
+
+    The panel said "0 right now" directly under "17 organisms alive" whenever
+    the viewer started paused, because it read the empty history instead of the
+    engine. Two numbers for one quantity is worse than no number.
+    """
+    from evolve.viz.app import VizApp
+    eng = Engine(small_config(organisms=6))
+    app = VizApp(eng, speed=1)
+    app.state.paused = True
+    app.run_frame()                       # paused: no history is recorded
+    assert app.state.history == []
+    assert eng.population.n_alive > 0
+    # The drawn text comes from the engine count, not from the empty history.
+    captured: list[str] = []
+    original = panels.Panel.text
+
+    def spy(self, text, *args, **kwargs):
+        captured.append(text)
+        return original(self, text, *args, **kwargs)
+
+    panels.Panel.text = spy
+    try:
+        app.run_frame()
+    finally:
+        panels.Panel.text = original
+    assert f"{eng.population.n_alive} right now" in captured
+    assert "0 right now" not in captured
+
+
 def test_restart_clears_the_previous_runs_history():
     """R must not splice two different worlds into one sparkline.
 

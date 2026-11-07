@@ -130,7 +130,7 @@ large population, so treat frame-rate claims as unmeasured.
 
 ## Status
 
-Milestones M1–M7 are implemented and tested (195 tests). Measured throughput on
+Milestones M1–M7 are implemented and tested (196 tests). Measured throughput on
 a single-core machine misses the design's §11 targets — see
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the honest numbers. NEAT-style
 speciation (M8) is deferred.

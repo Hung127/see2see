@@ -592,7 +592,8 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
         p.wrapped(note, TEXT_FAINT, "small")
     p.gap(4)
     p.text("population, recent frames", TEXT_FAINT, "small")
-    _draw_sparkline(p, state.history, (96, 178, 245))
+    _draw_sparkline(p, state.history, (96, 178, 245),
+                    engine.population.n_alive)
 
     p.section("matter (mass is conserved)")
     for label, value in matter_rows(engine):
@@ -692,11 +693,15 @@ def _draw_legend(p: Panel) -> None:
 
 
 def _draw_sparkline(p: Panel, history: list[tuple[int, int]],
-                    color: tuple[int, int, int]) -> None:
+                    color: tuple[int, int, int],
+                    alive: int | None = None) -> None:
     """Population line over the recent frames; labelled in words, no axes.
 
     With one or two samples a line means nothing, so the box is skipped and the
     current count is shown instead: the reader gets a fact, not an empty chart.
+    ``alive`` is the engine's live count, used when the history is empty (a
+    paused viewer on its first frame drew "0 right now" beside "17 organisms
+    alive", which reads as a contradiction).
     """
     height = 44
     width = p.rect.width - 2 * p._pad
@@ -704,7 +709,7 @@ def _draw_sparkline(p: Panel, history: list[tuple[int, int]],
     y0 = p.y
     values = [v for _, v in history]
     if len(values) < 3:
-        now = values[-1] if values else 0
+        now = values[-1] if values else (0 if alive is None else int(alive))
         p.text(f"{now} right now", TEXT_DIM, "small")
         p.text("a line appears after a few frames", TEXT_FAINT, "small")
         return
