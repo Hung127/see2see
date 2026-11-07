@@ -31,23 +31,7 @@ def draw_world(engine: Engine, screen: pygame.Surface, camera: Camera,
                layer: str = "climate") -> None:
     """Terrain grid plus plants, carcasses and organisms (no text)."""
     screen.fill(BG)
-    fields = engine.fields
-    cell = fields.cell_size
-    ix0, ix1, iy0, iy1 = _cell_range(camera, fields.n, cell)
-
-    for iy in range(iy0, iy1):
-        for ix in range(ix0, ix1):
-            color = layer_color(layer, float(fields.temperature[ix, iy]),
-                                float(fields.moisture[ix, iy]),
-                                float(fields.soil[ix, iy]),
-                                float(fields.terrain[ix, iy]),
-                                plant_density=float(fields.plant_density[ix, iy]),
-                                organism_density=float(fields.organism_density[ix, iy]),
-                                pheromone=float(fields.pheromone[ix, iy]))
-            x0, y0 = camera.to_screen(ix * cell, iy * cell)
-            x1, y1 = camera.to_screen((ix + 1) * cell, (iy + 1) * cell)
-            pygame.draw.rect(screen, color, (x0, y0, x1 - x0 + 1, y1 - y0 + 1))
-
+    _draw_terrain(engine, screen, camera, layer)
     _draw_plants(engine, screen, camera)
     _draw_carcasses(engine, screen, camera)
     _draw_organisms(engine, screen, camera)
@@ -61,6 +45,51 @@ def draw_world(engine: Engine, screen: pygame.Surface, camera: Camera,
     pygame.draw.rect(screen, WORLD_EDGE, (x0, y0, x1 - x0, y1 - y0), 1)
 
 
+def _draw_terrain(engine: Engine, screen: pygame.Surface, camera: Camera,
+                  layer: str) -> None:
+    """Fill the visible field cells with the layer's colour.
+
+    One rect per cell, which is what the layer colour is defined on. A batched
+    blit (build an ``n×n`` colour array, then scale it up) was measured and
+    rejected: it was *not* pixel-equivalent (187k–321k differing pixels at
+    common zooms) and it was slower than the loop once zoomed in, because the
+    upscaled blit cost grows with screen area while culled cells do not.
+    """
+    fields = engine.fields
+    cell = fields.cell_size
+    ix0, ix1, iy0, iy1 = _cell_range(camera, fields.n, cell)
+    for iy in range(iy0, iy1):
+        for ix in range(ix0, ix1):
+            color = layer_color(layer, float(fields.temperature[ix, iy]),
+                                float(fields.moisture[ix, iy]),
+                                float(fields.soil[ix, iy]),
+                                float(fields.terrain[ix, iy]),
+                                plant_density=float(fields.plant_density[ix, iy]),
+                                organism_density=float(fields.organism_density[ix, iy]),
+                                pheromone=float(fields.pheromone[ix, iy]))
+            x0, y0 = camera.to_screen(ix * cell, iy * cell)
+            x1, y1 = camera.to_screen((ix + 1) * cell, (iy + 1) * cell)
+            pygame.draw.rect(screen, color, (x0, y0, x1 - x0 + 1, y1 - y0 + 1))
+
+
+def _screen_points(camera: Camera, xs: np.ndarray, ys: np.ndarray,
+                   margin: int = 0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorised equivalent of ``camera.to_screen`` over arrays.
+
+    ``Camera.to_screen`` truncates towards zero (``int()``), so the array form
+    uses ``astype(np.int64)``, not ``floor``: the two disagree for negative
+    coordinates, and a plant just off the left edge must be placed where the
+    scalar helper would place it. Returns ``(sx, sy, visible)``, where
+    ``visible`` is the same test as ``_on_screen(camera, sx, sy, margin)``.
+    """
+    fx, fy = camera.focus
+    sx = ((xs - fx) * camera.zoom + camera.screen_w / 2.0).astype(np.int64)
+    sy = ((ys - fy) * camera.zoom + camera.screen_h / 2.0).astype(np.int64)
+    visible = ((-margin <= sx) & (sx <= camera.screen_w + margin)
+               & (-margin <= sy) & (sy <= camera.screen_h + margin))
+    return sx, sy, visible
+
+
 def _on_screen(camera: Camera, sx: int, sy: int, margin: int) -> bool:
     return (-margin <= sx <= camera.screen_w + margin
             and -margin <= sy <= camera.screen_h + margin)
@@ -72,25 +101,41 @@ def _rim(color: tuple[int, int, int]) -> tuple[int, int, int]:
 
 
 def _draw_plants(engine: Engine, screen: pygame.Surface, camera: Camera) -> None:
+    """Draw live plants, culling off-screen ones in one vectorised pass.
+
+    With 20,000 plants the scalar loop spent most of its time in per-call
+    ``to_screen`` overhead and in ``draw.circle`` calls for plants outside the
+    viewport. The transform and the visibility test are hoisted into NumPy, and
+    only visible plants reach the drawing call. The result is pixel-identical
+    to the scalar path (``tests/test_viz_render_lod.py`` asserts it), because
+    the same ``int()`` truncation and the same ``_on_screen`` bounds are used.
+    """
     plants = engine.plants
     idx = np.flatnonzero(plants.alive)
     if idx.size == 0:
         return
     radius = max(1, camera.scale(1.2))
-    for i in idx:
-        sx, sy = camera.to_screen(plants.x[i], plants.y[i])
-        if _on_screen(camera, sx, sy, radius):
-            pygame.draw.circle(screen, PLANT, (sx, sy), radius)
+    sx, sy, visible = _screen_points(camera, plants.x[idx], plants.y[idx], radius)
+    for x, y in zip(sx[visible].tolist(), sy[visible].tolist()):
+        pygame.draw.circle(screen, PLANT, (x, y), radius)
 
 
 def _draw_carcasses(engine: Engine, screen: pygame.Surface, camera: Camera) -> None:
+    """Draw carrion, culling in one vectorised pass (same geometry as before)."""
     carr = engine.carcasses
     idx = np.flatnonzero(carr.alive)
-    for i in idx:
-        sx, sy = camera.to_screen(carr.x[i], carr.y[i])
-        size = camera.scale(max(2.0, 2.0 * float(carr.biomass[i]) ** 0.5))
-        if _on_screen(camera, sx, sy, size):
-            screen.fill(CARCASS, (sx - size // 2, sy - size // 2, size, size))
+    if idx.size == 0:
+        return
+    lengths = np.maximum(2.0, 2.0 * np.sqrt(carr.biomass[idx]))
+    sizes = np.maximum(1, (lengths * camera.zoom).astype(np.int64))
+    sx, sy, _ = _screen_points(camera, carr.x[idx], carr.y[idx])
+    # Per-item margin: a large carcass still paints when its centre is just
+    # outside the viewport, exactly as the scalar `_on_screen(..., size)` did.
+    visible = ((-sizes <= sx) & (sx <= camera.screen_w + sizes)
+               & (-sizes <= sy) & (sy <= camera.screen_h + sizes))
+    for x, y, size in zip(sx[visible].tolist(), sy[visible].tolist(),
+                          sizes[visible].tolist()):
+        screen.fill(CARCASS, (x - size // 2, y - size // 2, size, size))
 
 
 def _draw_organisms(engine: Engine, screen: pygame.Surface, camera: Camera) -> None:
@@ -99,19 +144,23 @@ def _draw_organisms(engine: Engine, screen: pygame.Surface, camera: Camera) -> N
     if idx.size == 0:
         return
     phen = pop.phenotypes()
-    for row, i in enumerate(idx):
-        sx, sy = camera.to_screen(pop.x[i], pop.y[i])
-        # At least 3 px: a 1-px dot with a rim is indistinguishable from a
-        # plant speck, and telling "alive" from "plant" is the first thing a
-        # beginner needs to do.
-        radius = max(3, camera.scale(max(1.5, 2.0 * float(phen[row, 0]) ** 0.5)))
-        if not _on_screen(camera, sx, sy, radius):
-            continue
-        color = diet_color(float(phen[row, 9]))
+    # At least 3 px: a 1-px dot with a rim is indistinguishable from a plant
+    # speck, and telling "alive" from "plant" is the first thing a beginner
+    # needs to do.
+    lengths = np.maximum(1.5, 2.0 * np.sqrt(phen[:, 0]))
+    radii = np.maximum(3, np.maximum(1, (lengths * camera.zoom).astype(np.int64)))
+    sx, sy, _ = _screen_points(camera, pop.x[idx], pop.y[idx])
+    visible = ((-radii <= sx) & (sx <= camera.screen_w + radii)
+               & (-radii <= sy) & (sy <= camera.screen_h + radii))
+    rows = np.flatnonzero(visible)
+    for row in rows.tolist():
+        colour = diet_color(float(phen[row, 9]))
         # Dark rim: without it a herbivore-leaning animal is the same green
         # blob as a plant, and a beginner cannot tell which specks are alive.
-        pygame.draw.circle(screen, _rim(color), (sx, sy), radius)
-        pygame.draw.circle(screen, color, (sx, sy), radius - 1)
+        pygame.draw.circle(screen, _rim(colour),
+                           (int(sx[row]), int(sy[row])), int(radii[row]))
+        pygame.draw.circle(screen, colour,
+                           (int(sx[row]), int(sy[row])), int(radii[row]) - 1)
 
 
 def _draw_events(engine: Engine, screen: pygame.Surface, camera: Camera) -> None:
