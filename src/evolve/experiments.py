@@ -303,6 +303,50 @@ def _prepare_engine(config: Config, scenario: Scenario, scale: float,
     return engine
 
 
+def scenario_config(scenario_id: str, *, scale: float = DEFAULT_SCALE,
+                    ticks: int | None = None, seed: int | None = None
+                    ) -> tuple[Config, "Scenario"]:
+    """Load a declared scenario's *configuration* without building an engine.
+
+    Callers that construct their own engine (a resumption, a factory that
+    injects a fault, the controller comparison) need the scaled config before
+    construction, so they must not pay for an engine just to read it.
+    """
+    key = str(scenario_id).lower()
+    if key not in SCENARIOS:
+        raise KeyError(f"unknown scenario {scenario_id!r}; "
+                       f"known: {sorted(SCENARIOS)}")
+    scenario = SCENARIOS[key]
+    return _load_scenario_config(scenario, scale, ticks, seed), scenario
+
+
+def build_scenario_engine(scenario_id: str, *, scale: float = DEFAULT_SCALE,
+                          ticks: int | None = None, seed: int | None = None,
+                          engine_factory: Callable[[Config], Engine] | None = None
+                          ) -> tuple[Engine, "Scenario"]:
+    """Construct the starting engine of a declared scenario, setup applied.
+
+    This is the piece of :func:`run_scenario` that other runners need when they
+    want to evaluate something *inside* a scenario (the controller comparison is
+    the one caller). It deliberately does not step, record, plot or write
+    anything: the caller owns the loop, so it can attach a controller or prime a
+    recorder without the scenario machinery second-guessing it.
+
+    Setup hooks are initial conditions, so ``rebaseline`` is applied here exactly
+    as it is in ``run_scenario``. Interventions are *not* applied: they are
+    scheduled events inside the run, and the caller is told about them through
+    the returned scenario's ``intervention``/``intervention_tick`` fields.
+
+    Returns ``(engine, scenario)``. ``engine.cfg`` is the scaled configuration,
+    so the caller can read the horizon, interval and seed from it.
+    """
+    config, scenario = scenario_config(scenario_id, scale=scale, ticks=ticks,
+                                       seed=seed)
+    factory = engine_factory or (lambda cfg: Engine(cfg))
+    engine = _prepare_engine(config, scenario, scale, factory)
+    return engine, scenario
+
+
 def _run_engine(engine: Engine, scenario: Scenario, scale: float,
                 recorder: StatsRecorder) -> list[dict[str, Any]]:
     """Step to the configured horizon, sample stats, run the intervention."""

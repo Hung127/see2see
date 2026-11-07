@@ -103,6 +103,38 @@ Because the arena removes reproduction, an organism that dies early has fewer
 opportunities to feed; that is part of the endpoint, not a reason to drop the
 pair.
 
+## Controller comparison across scenarios
+
+`evolve.cli controllers` evaluates the controller baselines (IMPROVE §4.2). By
+default it measures the plain calibrated configuration. With `--scenarios` it
+runs every controller in every **declared** experiment and every seed:
+
+```bash
+# plain configuration (the original single-environment report)
+PYTHONPATH=src python3 -m evolve.cli controllers --out out/ctl \
+    --seeds 11 12 --ticks 120
+
+# the same controllers in three declared environments
+PYTHONPATH=src python3 -m evolve.cli controllers --out out/ctl_multi \
+    --seeds 11 12 --ticks 120 --scale 0.25 --scenarios default d f
+```
+
+Each scenario contributes its configuration, its setup hook (applied once at
+construction, with `rebaseline`), its supervised `step` options and its
+scheduled intervention. The `scenario` column appears in `comparison.csv` only
+when more than one environment runs, so a single-environment file keeps its
+original shape. `summary.md` gains a **Robustness across scenarios** table with
+three declared numbers per controller: `persistence_rate` (runs still non-zero
+at the horizon), `mean_survival_rate` and `worst_survival_rate` (the minimum,
+i.e. the environment that hurt that controller most), plus
+`mean_reproduction_success`. None of them is a fitness score, and the report
+says the scenario list is a declared set, not a sample of environments.
+
+`--scale` applies to the scenarios only (their YAMLs are design scale); the
+plain configuration is used as written. A warm-up (`--warmup N`) is validated
+against the *shortest* horizon across the selected cells, so it can never
+consume the whole evaluation window of a short scenario.
+
 ## Scaling
 
 `--scale s` multiplies world lengths and the horizon by `s`, and plant and

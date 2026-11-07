@@ -47,6 +47,27 @@ DEATH_CAUSES = ("predation", "starvation", "senescence", "health")
 DEATH_AGE_BIN = 25
 DEATH_AGE_BINS = 40
 
+#: Cumulative run totals used by the controller evaluation endpoints
+#: (IMPROVE §4.2). These are *population-level* aggregates, so unlike the
+#: per-organism counters they keep counting after an animal dies. All are
+#: online accumulations (a few floats per tick, never per-organism history),
+#: statistics-only, and therefore excluded from ``checksum()``.
+RUN_TOTALS = (
+    "distance",       # world units travelled
+    "rest_ticks",     # organism-ticks spent resting
+    "feed_attempts",  # eaters that wanted to bite this tick
+    "feed_successes", # eaters that got a bite in reach
+    "plant_intake",   # bu taken from plants
+    "meat_intake",    # bu taken from carcasses and kills
+    "energy_gain",    # bu actually added to reserves (after assimilation)
+    "strikes",        # attacks that reached a target
+    "strikes_hit",    # attacks that dealt damage > 0
+    "repro_attempts", # reproduction attempts
+    "repro_successes",# births paid for
+    "metabolic_cost", # bu respired + burned to cover metabolism
+    "death_age_sum",  # Σ age at death, for a mean lifespan
+)
+
 
 class Engine:
     """One deterministic simulation instance."""
@@ -79,6 +100,13 @@ class Engine:
         # Age-at-death histogram (bounded memory; see DEATH_AGE_BIN). Statistics
         # only — excluded from checksum for the same reason as death_counts.
         self.death_age_hist = np.zeros(DEATH_AGE_BINS, dtype=np.int64)
+        # Cumulative *run* totals for the evaluation endpoints (IMPROVE §4.2).
+        # The per-organism counters answer "what has this living animal done";
+        # these answer "what has this population done", so they keep counting
+        # after an organism dies. Online aggregation only: a handful of floats,
+        # no per-organism history. Statistics only, so they are snapshotted but
+        # excluded from ``checksum()`` — nothing in the tick reads them.
+        self.run_totals: dict[str, float] = {name: 0.0 for name in RUN_TOTALS}
         self.tick = 0
         self.stats = None  # wired to StatsRecorder in Task 18
         # Optional bounded ancestry log (see stats.LineageRecorder). ``None`` by
@@ -280,6 +308,10 @@ class Engine:
         pop.heading[:] = heading
         pop.dist_moved += speed
         pop.rest_ticks += actions.rest
+        # Run totals (IMPROVE §4.2): population-level movement/rest, kept after
+        # death. Pure accumulation of values already computed; no draw changes.
+        self.run_totals["distance"] += float(speed.sum())
+        self.run_totals["rest_ticks"] += float(actions.rest.sum())
         self._speed = speed
 
     # -- stage 9: feeding -----------------------------------------------------
@@ -293,6 +325,7 @@ class Engine:
         eaters = np.flatnonzero(actions.eat)
         if eaters.size == 0:
             return
+        self.run_totals["feed_attempts"] += float(eaters.size)
         pop = self.population
         phen = self._refresh_phen()
         mass = phen[:, 0]
@@ -373,6 +406,9 @@ class Engine:
         undigested = alloc - gain
         pop.energy[rows] += gain
         self.detritus += float(undigested.sum())
+        # Run total (IMPROVE §4.2): energy actually acquired, after assimilation
+        # losses. Food intake alone overstates acquisition for a poor diet.
+        self.run_totals["energy_gain"] += float(gain.sum())
 
         # `target` may repeat (several eaters on one resource), so accumulate
         # the take per resource, then subtract each resource exactly once.
@@ -385,6 +421,11 @@ class Engine:
             self.carcasses.biomass[c_idx] -= taken[n_plant_res:]
             pop.meat_intake[rows[~is_plant]] += alloc[~is_plant]
         pop.bites[rows] += 1.0
+        # Run totals (IMPROVE §4.2): feeding success and intake, accumulated
+        # population-level so they survive the eater's death.
+        self.run_totals["feed_successes"] += float(rows.size)
+        self.run_totals["plant_intake"] += float(alloc[is_plant].sum())
+        self.run_totals["meat_intake"] += float(alloc[~is_plant].sum())
 
         dead = self.plants.biomass <= _EPS
         if np.any(dead):
@@ -410,6 +451,10 @@ class Engine:
         bins = np.minimum(pop.age[idx] // DEATH_AGE_BIN,
                           DEATH_AGE_BINS - 1)
         self.death_age_hist += np.bincount(bins, minlength=DEATH_AGE_BINS)
+        # Run total (IMPROVE §4.2): sum of ages at death, so mean lifespan is
+        # exact from cumulative state rather than guessed from the coarse
+        # histogram. Uses the same ``idx`` whose ``age`` is still valid.
+        self.run_totals["death_age_sum"] += float(pop.age[idx].sum())
         if self.lineage is not None:
             if causes is None:
                 cause_list = [str(pop.death_cause[int(i)]) for i in idx]
@@ -467,9 +512,13 @@ class Engine:
         self.ledger.heat_out += paid
         pop.hunts[rows] += 1.0
         self.fields.add_pheromone(pop.x[rows], pop.y[rows], 0.05)
+        # Run totals (IMPROVE §4.2): attacks that reached a target, and attacks
+        # that actually damaged one. Both are population-level accumulations.
+        self.run_totals["strikes"] += float(rows.size)
 
         damage = strike_damage(phen[rows, 5], mass[rows],
                                phen[target, 6], mass[target], self.cfg.energy)
+        self.run_totals["strikes_hit"] += float(np.count_nonzero(damage > 0.0))
         np.add.at(pop.health, target, -damage)
         pop.health[pop.health < 0.0] = 0.0
         np.add.at(pop.damage_taken, target, damage)  # victims may be hit twice
@@ -530,6 +579,7 @@ class Engine:
                     pop.energy[a] += gain
                     pop.meat_intake[a] += gain
                     gained += gain
+                    self.run_totals["energy_gain"] += gain
             leftover = total - gained
             if leftover > _EPS:
                 self.carcasses.add(float(pop.x[v]), float(pop.y[v]), leftover)
@@ -563,6 +613,7 @@ class Engine:
 
         deficit = cost - paid
         starving = deficit > 0.0
+        burned = 0.0
         if np.any(starving):
             burn = np.minimum(self.cfg.energy.catabolism, pop.body[starving])
             pop.body[starving] -= burn
@@ -577,6 +628,9 @@ class Engine:
         pop.health = np.minimum(pop.health + regen * self.cfg.organisms.health_regen,
                                 self.cfg.organisms.health_max)
         pop.health = np.maximum(pop.health, 0.0)
+        # Run total (IMPROVE §4.2): energy spent on metabolism this tick — exactly
+        # the matter that moved energy/body -> soil above (respired + catabolised).
+        self.run_totals["metabolic_cost"] += total_paid + burned
         pop.age += 1
 
     # -- stage 12: reproduction ----------------------------------------------
@@ -604,12 +658,14 @@ class Engine:
             if i in used:
                 continue
             pop.repro_attempts[i] += 1.0
+            self.run_totals["repro_attempts"] += 1.0
             used.add(i)
             mate = (-1 if mode == "asexual"
                     else self._find_mate(i, want, used, emax, threshold))
             if mate >= 0:
                 used.add(mate)
                 pop.repro_attempts[mate] += 1.0
+                self.run_totals["repro_attempts"] += 1.0
                 child_genome = crossover(pop.genome[i], pop.genome[mate], self.rng)
                 child_genome, n_mut = mutate(
                     child_genome[None, :],
@@ -674,6 +730,7 @@ class Engine:
             return False  # cap reached: parent pays nothing
         pop.energy[parent] -= payer_share
         pop.repro_success[parent] += 1.0
+        self.run_totals["repro_successes"] += 1.0
         self.births_total += 1
         if self.lineage is not None:
             # Only new ids are recorded; the founders were never born in a tick,

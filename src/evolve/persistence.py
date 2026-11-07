@@ -466,6 +466,14 @@ def save_snapshot(engine, path: str) -> dict[str, Any]:
         [engine.death_counts[c] for c in sorted(engine.death_counts)],
         dtype=np.int64)
     payload["death_age_hist"] = np.asarray(engine.death_age_hist, dtype=np.int64)
+    # Cumulative run totals (IMPROVE §4.2). Statistics-only, so they are stored
+    # for reporting continuity but excluded from ``checksum()``. Names and order
+    # come from ``engine.RUN_TOTALS`` so the two cannot drift.
+    from .engine import RUN_TOTALS
+    payload["run_total_names"] = np.asarray(list(RUN_TOTALS), dtype="U32")
+    payload["run_total_values"] = np.asarray(
+        [float(engine.run_totals.get(name, 0.0)) for name in RUN_TOTALS],
+        dtype=np.float64)
     payload["config_hash"] = np.asarray(config_hash(engine.cfg))
     payload["spec_version"] = np.asarray(SPEC_VERSION)
     payload["format_version"] = np.int64(SNAPSHOT_FORMAT_VERSION)
@@ -552,6 +560,15 @@ def load_snapshot(path: str, config: Config):
                 in zip(z["death_causes"], z["death_counts"])}
             engine.death_age_hist = np.asarray(z["death_age_hist"],
                                                dtype=np.int64).copy()
+        # Cumulative run totals (IMPROVE §4.2). Statistics, not dynamics, so a
+        # build that predates them simply starts its totals at zero; the names
+        # are read back rather than assumed, so an older snapshot with a
+        # different (shorter) name list still loads.
+        if "run_total_names" in z.files and "run_total_values" in z.files:
+            names = [str(name) for name in z["run_total_names"]]
+            values = np.asarray(z["run_total_values"], dtype=np.float64)
+            for name, value in zip(names, values):
+                engine.run_totals[name] = float(value)
 
     engine._refresh_phen()
     return engine

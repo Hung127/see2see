@@ -123,6 +123,13 @@ def _parser() -> argparse.ArgumentParser:
                      help="override the founder population")
     ctl.add_argument("--config", default=None,
                      help="base configuration (default: configs/default.yaml)")
+    ctl.add_argument("--scenarios", nargs="+", default=None,
+                     help="declared experiment scenarios to evaluate in (a b c "
+                          "d e f h), optionally with 'default'; each controller "
+                          "runs in every scenario x seed")
+    ctl.add_argument("--scale", type=float, default=None,
+                     help="scenario scaling factor (default: the experiment "
+                          "default); ignored for the plain configuration")
     ctl.add_argument("--only", nargs="+", default=None,
                      help="controllers to run (default: all)")
     ctl.set_defaults(func=_cmd_controllers)
@@ -326,18 +333,32 @@ def _cmd_experiments(args) -> int:
 
 def _cmd_controllers(args) -> int:
     from .controller_eval import run_controller_comparison
+    from .experiments import DEFAULT_SCALE
 
+    scale = args.scale if args.scale is not None else DEFAULT_SCALE
     summary = run_controller_comparison(
         args.out, controllers=args.only, seeds=args.seeds,
         ticks=args.ticks, config_path=args.config,
-        population=args.population, warmup_ticks=args.warmup)
-    print(f"controller comparison: {len(summary['rows'])} runs, "
-          f"{summary['ticks']} ticks, seeds {summary['seeds']} -> {args.out}")
+        population=args.population, warmup_ticks=args.warmup,
+        scenarios=args.scenarios, scale=scale)
+    header = (f"controller comparison: {len(summary['rows'])} runs, "
+              f"{summary['ticks']} ticks, seeds {summary['seeds']}")
+    if len(summary.get("scenarios") or []) > 1:
+        header += (f", scenarios {summary['scenarios']} at scale "
+                   f"{summary['scale']:g}")
+    print(f"{header} -> {args.out}")
     for r in summary["rows"]:
-        print(f"  {r['controller']:8s} seed {r['seed']:>3d}: final population "
-              f"{r['final_population']:4d}, births {r['births']:4d}, "
+        tag = f" [{r['scenario']}]" if "scenario" in r and len(
+            summary.get("scenarios") or []) > 1 else ""
+        print(f"  {r['controller']:8s} seed {r['seed']:>3d}{tag}: final "
+              f"population {r['final_population']:4d}, births {r['births']:4d}, "
               f"deaths {r['deaths']:4d}"
               f"{' [EXTINCT]' if r['extinct'] else ''}")
+    for kind, block in (summary.get("robustness") or {}).items():
+        print(f"  robustness {kind:8s}: persistence "
+              f"{block['persistence_rate']:.3f}, mean survival "
+              f"{block['mean_survival_rate']:.3f}, worst "
+              f"{block['worst_survival_rate']:.3f}")
     return 0
 
 

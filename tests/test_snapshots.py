@@ -70,6 +70,16 @@ def test_resume_equals_continuation(tmp_path):
         assert np.array_equal(getattr(resumed.population, name),
                               getattr(direct.population, name)), name
     assert alive.size <= resumed.population.alive.size
+    # Cumulative run totals are statistics, but a resume must not lose them:
+    # the snapshot stores them, so the resumed sum equals the uninterrupted one.
+    assert set(resumed.run_totals) == set(direct.run_totals)
+    for name, value in direct.run_totals.items():
+        assert resumed.run_totals[name] == pytest.approx(value, rel=1e-12), name
+    # And they are not part of the checksum contract (they are statistics).
+    tampered = load_snapshot(str(tmp_path / "snap.npz"), cfg)
+    untouched = load_snapshot(str(tmp_path / "snap.npz"), cfg)
+    tampered.run_totals["distance"] += 1.0
+    assert tampered.checksum() == untouched.checksum()
 
 
 def test_unknown_version_refused(tmp_path):

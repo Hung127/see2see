@@ -106,3 +106,22 @@ def test_snapshot_version_exit_code(tmp_path):
     np.savez_compressed(tampered, **data)
 
     assert main(["run", "--config", cfg_path, "--resume", tampered]) == 3
+
+
+def test_controllers_subcommand_multi_scenario_smoke(tmp_path):
+    out = str(tmp_path / "ctl")
+    assert main(["controllers", "--out", out, "--seeds", "11", "--ticks", "10",
+                 "--population", "20", "--scale", "0.2",
+                 "--scenarios", "default", "f", "--only", "neural"]) == 0
+    text = open(os.path.join(out, "summary.md"), encoding="utf-8").read()
+    assert "Robustness across scenarios" in text
+    with open(os.path.join(out, "comparison.csv"), newline="") as fh:
+        header = next(fh).strip().split(",")
+    assert header[0] == "scenario"
+
+
+def test_controllers_subcommand_rejects_unknown_scenario(tmp_path):
+    with pytest.raises(ValueError, match="unknown scenarios"):
+        main(["controllers", "--out", str(tmp_path / "bad"), "--seeds", "11",
+              "--ticks", "5", "--population", "10", "--scale", "0.2",
+              "--scenarios", "default", "nope"])

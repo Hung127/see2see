@@ -257,3 +257,81 @@ def test_environmental_stress_is_zero_outside_a_drought():
     assert not eng.fields.water_stress.any()
     assert StatsRecorder().record(eng)["environmental_stress"] == 0.0
 
+
+
+# -- IMPROVE §4.2: cumulative run totals for the evaluation endpoints --------
+def test_run_totals_are_statistics_not_state():
+    """Touching a run total must not change the checksum.
+
+    These totals answer "what has this population done"; nothing in the tick
+    reads them, so the contract is the same as ``death_counts``: snapshotted for
+    reporting continuity, excluded from ``checksum()``.
+    """
+    from evolve.engine import RUN_TOTALS
+
+    eng = Engine(make_config(seed=11, n=30))
+    eng.run(40)
+    before = eng.checksum()
+    assert set(eng.run_totals) == set(RUN_TOTALS)
+    for name in RUN_TOTALS:
+        eng.run_totals[name] += 12345.0
+    assert eng.checksum() == before
+
+
+def test_run_totals_reconcile_with_the_tick():
+    """The accumulated totals must be consistent with the engine's own events.
+
+    Not exact bit-equality with per-organism counters (those only cover living
+    animals, while the run totals also include the dead), but the relationships
+    that must hold for any honest accumulation do hold.
+    """
+    from dataclasses import replace
+
+    from evolve.config import EventConfig
+    from evolve.engine import RUN_TOTALS
+
+    cfg = make_config(seed=12, n=60, ticks=200)
+    cfg = replace(cfg, environment=replace(
+        cfg.environment,
+        events=(EventConfig(kind="drought", start_tick=0, duration=200,
+                            magnitude=0.3),)))
+    eng = Engine(cfg)
+    eng.run(150)
+    totals = eng.run_totals
+    assert set(totals) == set(RUN_TOTALS)
+    assert all(v >= 0.0 for v in totals.values())
+    # Assimilated energy can never exceed the food that was taken.
+    assert (totals["energy_gain"]
+            <= totals["plant_intake"] + totals["meat_intake"] + 1e-9)
+    # Successes are subsets of attempts.
+    assert totals["feed_successes"] <= totals["feed_attempts"]
+    assert totals["strikes_hit"] <= totals["strikes"]
+    assert totals["repro_successes"] <= totals["repro_attempts"]
+    # Death ages are summed once per death and the mean must be an age.
+    assert totals["death_age_sum"] >= float(eng.deaths_total)
+
+
+def test_run_totals_keep_counting_after_death():
+    """Unlike the per-organism counters, a run total survives its organism."""
+    eng = Engine(make_config(seed=13, n=8, ticks=200))
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    # Drive one animal's activity, then kill it and continue.
+    pop.bites[idx[0]] = 5.0
+    pop.energy[idx[0]] = 0.0
+    pop.body[idx[0]] = 0.0
+    before_distance = eng.run_totals["distance"]
+    eng.step()
+    # The run total of the dead animal's earlier ticks is not rolled back.
+    assert eng.run_totals["distance"] >= before_distance
+    # Slots compact, so the population cannot be larger than it was.
+    assert eng.population.n_alive <= idx.size
+
+
+def test_run_totals_carry_a_mean_lifespan_denominator():
+    """``death_age_sum`` is the numerator of an exact mean lifespan."""
+    eng = Engine(make_config(seed=14, n=20, ticks=120))
+    eng.run(100)
+    if eng.deaths_total:
+        mean_age = eng.run_totals["death_age_sum"] / eng.deaths_total
+        assert 0.0 <= mean_age <= float(eng.tick) + 1.0

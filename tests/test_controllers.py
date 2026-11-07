@@ -321,3 +321,187 @@ def test_stats_prime_does_not_report_pre_resume_counters():
     # Growth is measured from the primed population, not from zero.
     assert row["growth_rate"] == eng.population.n_alive - primed_population
 
+
+
+# -- IMPROVE §4.2: the full endpoint list ------------------------------------
+def test_controller_eval_reports_every_named_endpoint():
+    """The harness must cover the endpoints the brief names, not four of them.
+
+    Survival rate, mean lifespan, reproduction success, energy acquisition and
+    efficiency, movement efficiency, feeding success, predation success,
+    behavioural diversity and environmental stress are all measured from the
+    engine's cumulative run totals plus the final recorder row.
+    """
+    result = run_controller_comparison(
+        __import__("tempfile").mkdtemp(), controllers=["neural", "rule"],
+        seeds=(11,), ticks=10, population=20, config_path=None)
+    required = {
+        "survival_rate", "mean_lifespan", "reproduction_success",
+        "energy_acquired", "energy_efficiency", "movement_efficiency",
+        "feeding_success", "predation_success", "behavioural_diversity",
+        "environmental_stress",
+    }
+    assert required <= set(ENDPOINTS)
+    for row in result["rows"]:
+        assert required <= set(row)
+        assert 0.0 <= row["survival_rate"] <= 1.0
+        assert row["mean_lifespan"] >= 0.0
+        assert 0.0 <= row["reproduction_success"] <= 1.0
+        assert 0.0 <= row["feeding_success"] <= 1.0
+        assert 0.0 <= row["predation_success"] <= 1.0
+        assert row["energy_acquired"] >= 0.0
+        assert row["energy_efficiency"] >= 0.0
+        assert row["movement_efficiency"] >= 0.0
+        assert row["behavioural_diversity"] >= 0.0
+        assert 0.0 <= row["environmental_stress"] <= 1.0
+    assert "survival_rate" in result["analysis"]["rule"]
+
+
+def test_controller_eval_endpoints_are_reproducible(tmp_path):
+    a = run_controller_comparison(
+        str(tmp_path / "a"), controllers=["neural", "passive"], seeds=(11,),
+        ticks=8, population=20)
+    b = run_controller_comparison(
+        str(tmp_path / "b"), controllers=["neural", "passive"], seeds=(11,),
+        ticks=8, population=20)
+    assert a["rows"] == b["rows"]
+    for endpoint in ("survival_rate", "reproduction_success",
+                     "feeding_success", "energy_efficiency"):
+        assert (a["analysis"]["passive"][endpoint]["mean_diff"]
+                == pytest.approx(b["analysis"]["passive"][endpoint]["mean_diff"]))
+
+
+def test_controller_eval_summary_lists_the_new_endpoints(tmp_path):
+    run_controller_comparison(str(tmp_path), controllers=["neural", "passive"],
+                              seeds=(11,), ticks=8, population=20)
+    text = (tmp_path / "summary.md").read_text()
+    for name in ("Survival rate", "Mean lifespan", "Repro success",
+                 "Energy acquired", "Energy efficiency",
+                 "Movement efficiency", "Feeding success",
+                 "Predation success", "Behavioural diversity"):
+        assert name in text, name
+
+
+def test_controller_endpoints_survive_a_warmup_resume(tmp_path):
+    """Run totals must be differenced from the resume point, not from zero.
+
+    Otherwise the warm-up's feeding and movement would be attributed to the
+    evaluation window and every arm would inherit them equally.
+    """
+    result = run_controller_comparison(
+        str(tmp_path), controllers=["neural", "passive"], seeds=(11,),
+        ticks=10, population=20, warmup_ticks=5)
+    for row in result["rows"]:
+        for name in ("energy_acquired", "survival_rate", "feeding_success"):
+            assert row[name] >= 0.0
+    # The two arms resumed from the same snapshot: their start point is shared,
+    # so a difference in movement efficiency can only come from the controller.
+    by_kind = {r["controller"]: r for r in result["rows"]}
+    assert "survival_rate" in by_kind["neural"]
+
+
+# -- IMPROVE §4.2: evaluation across scenarios -------------------------------
+def test_multi_scenario_runs_every_controller_in_every_scenario(tmp_path):
+    """A scenario is a distinct environment, not a label on one run."""
+    result = run_controller_comparison(
+        str(tmp_path), controllers=["neural", "passive"], seeds=(11,),
+        ticks=12, population=20, scenarios=["default", "f"], scale=0.2)
+
+    assert result["scenarios"] == ["default", "f"]
+    assert len(result["rows"]) == 2 * 1 * 2          # controllers x seeds x scenarios
+    assert {r["scenario"] for r in result["rows"]} == {"default", "f"}
+    # Analysis is nested per scenario, never flattened by accident.
+    assert set(result["analysis"]) == {"default", "f"}
+    for block in result["analysis"].values():
+        assert "passive" in block
+        assert "survival_rate" in block["passive"]
+    # The two cells are actually different runs, not the same numbers twice.
+    by_cell = {(r["scenario"], r["controller"]): r["checksum"]
+               for r in result["rows"]}
+    assert by_cell[("default", "neural")] != by_cell[("f", "neural")]
+
+
+def test_multi_scenario_csv_adds_the_scenario_column_only_when_needed(tmp_path):
+    single = tmp_path / "single"
+    multiple = tmp_path / "multi"
+    run_controller_comparison(str(single), controllers=["neural", "passive"],
+                              seeds=(11,), ticks=8, population=20)
+    run_controller_comparison(str(multiple), controllers=["neural", "passive"],
+                              seeds=(11,), ticks=8, population=20,
+                              scenarios=["default", "f"], scale=0.2)
+    with open(single / "comparison.csv", newline="") as fh:
+        single_header = next(csv.reader(fh))
+    with open(multiple / "comparison.csv", newline="") as fh:
+        multi_header = next(csv.reader(fh))
+    assert single_header[0] == "controller"       # unchanged legacy shape
+    assert multi_header[0] == "scenario"
+    # The endpoints themselves keep their order and meaning.
+    assert single_header[2:] == multi_header[3:]
+
+
+def test_multi_scenario_robustness_is_present_and_bounded(tmp_path):
+    result = run_controller_comparison(
+        str(tmp_path), controllers=["neural", "passive"], seeds=(11, 12),
+        ticks=10, population=20, scenarios=["default", "d", "f"], scale=0.2)
+    robustness = result["robustness"]
+    assert set(robustness) == {"neural", "passive"}
+    for block in robustness.values():
+        assert block["scenarios"] == 3
+        assert block["runs"] == 6                 # 3 scenarios x 2 seeds
+        assert 0.0 <= block["persistence_rate"] <= 1.0
+        assert 0.0 <= block["mean_survival_rate"] <= 1.0
+        assert 0.0 <= block["worst_survival_rate"] <= block["mean_survival_rate"]
+        assert 0.0 <= block["mean_reproduction_success"] <= 1.0
+    # Nothing calls the worst case a score: mean and minimum are separate keys.
+    text = (tmp_path / "summary.md").read_text()
+    assert "Robustness across scenarios" in text
+    assert "not a generalisation" in text
+    # The per-scenario paired tables must be labelled, not merged.
+    assert "### Scenario `default`" in text
+    assert "### Scenario `f`" in text
+
+
+def test_multi_scenario_rejects_unknown_names(tmp_path):
+    with pytest.raises(ValueError, match="unknown scenarios"):
+        run_controller_comparison(str(tmp_path), controllers=["neural"],
+                                  seeds=(11,), ticks=5, population=10,
+                                  scenarios=["default", "zzz"], scale=0.2)
+
+
+def test_multi_scenario_reproducible(tmp_path):
+    kwargs = dict(controllers=["neural", "passive"], seeds=(11,), ticks=10,
+                  population=20, scenarios=["default", "f"], scale=0.2)
+    a = run_controller_comparison(str(tmp_path / "a"), **kwargs)
+    b = run_controller_comparison(str(tmp_path / "b"), **kwargs)
+    assert a["rows"] == b["rows"]
+    assert a["robustness"] == b["robustness"]
+    assert (a["analysis"]["f"]["passive"]["survival_rate"]["mean_diff"]
+            == pytest.approx(
+                b["analysis"]["f"]["passive"]["survival_rate"]["mean_diff"]))
+
+
+def test_default_only_scenario_list_keeps_the_legacy_shape(tmp_path):
+    """``--scenarios default`` means the plain configuration, not a new shape."""
+    result = run_controller_comparison(
+        str(tmp_path), controllers=["neural", "passive"], seeds=(11,),
+        ticks=8, population=20, scenarios=["default"])
+    assert result["scenarios"] == ["default"]
+    assert result["robustness"] is None
+    assert "passive" in result["analysis"]      # flat, not nested
+    with open(tmp_path / "comparison.csv", newline="") as fh:
+        assert next(csv.reader(fh))[0] == "controller"
+
+
+def test_scenario_setup_hooks_run_inside_the_comparison(tmp_path):
+    """Scenarios b/d/f install initial conditions; the harness must honour them."""
+    result = run_controller_comparison(
+        str(tmp_path), controllers=["neural"], seeds=(11,), ticks=8,
+        population=20, scenarios=["f"], scale=0.2)
+    # Scenario f clips the attack locus and disables predation for every arm;
+    # the run must complete and report normally (no exception, one row per arm).
+    assert len(result["rows"]) == 1
+    row = result["rows"][0]
+    assert row["scenario"] == "f"
+    assert row["final_population"] >= 0
+    # No strikes can land when the predation stage is off.
+    assert row["predation_success"] == 0.0

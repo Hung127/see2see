@@ -253,11 +253,43 @@ Paired seeds: every controller runs on the same base seed, so the world, plant
 layout, founder genomes and every environmental draw are identical. The only
 variable is the decision function. All controllers see the same 16-channel
 observation and all outputs go through `actions.decode`, so a baseline pays
-identical movement, feeding and reproduction costs. Endpoints:
-`final_population`, `births`, `deaths`, `mean_energy`,
-`mean_organism_biomass`, `survival_median`, `foraging_efficiency`. Statistics:
-paired differences against `neural` on the same seed, percentile bootstrap CI
-and the in-house Wilcoxon signed-rank test already used by assay G.
+identical movement, feeding and reproduction costs.
+
+Endpoints (append-only order, so old CSVs keep their column meaning):
+
+| Group | Endpoints |
+|---|---|
+| original | `final_population`, `births`, `deaths`, `mean_energy`, `mean_organism_biomass`, `survival_median`, `foraging_efficiency` |
+| IMPROVE §4.2 | `survival_rate`, `mean_lifespan`, `reproduction_success`, `energy_acquired`, `energy_efficiency`, `movement_efficiency`, `feeding_success`, `predation_success`, `behavioural_diversity`, `environmental_stress` |
+
+The §4.2 endpoints come from a population-level cumulative `Engine.run_totals`
+dict (13 online accumulators: distance, rest ticks, feeding attempts/successes,
+plant and meat intake, assimilated energy, strikes/hits, reproduction
+attempts/successes, metabolic cost, summed age at death). They are *statistics*:
+snapshotted so a resumed report does not lose them, but excluded from
+`checksum()` because nothing in the tick reads them. `energy_acquired` is energy
+actually added to reserves *after* assimilation, so a poor diet is not credited
+with food it could not use.
+
+Definitions the report states verbatim: `survival_rate` = alive at horizon /
+(starters + births); `mean_lifespan` = Σ age-at-death / deaths; ratios return
+`0.0` on a zero denominator and the report notes that `0.000` means **no attempt
+in this window**, not a measured zero.
+
+**Multiple scenarios.** `controllers --scenarios a b f` (or `--scenarios default
+f`) evaluates every controller in every declared experiment × seed, applying
+that scenario's setup hook at construction, its supervised step options and its
+scheduled intervention. The CSV gains a `scenario` column *only* when more than
+one environment runs; a single environment — including `--scenarios default` —
+keeps the original shape. Cross-scenario results are summarised with three
+declared numbers per controller (`persistence_rate`, `mean_survival_rate`,
+`worst_survival_rate`, plus `mean_reproduction_success`). They are explicitly
+**not** a hidden fitness score, and the report says the scenario set is a
+declared list, not a sample of environments.
+
+Statistics: paired differences against `neural` on the same scenario and seed,
+percentile bootstrap CI and the in-house Wilcoxon signed-rank test already used
+by assay G.
 
 ### Sensitivity sweeps (`evolve.cli sensitivity`)
 
@@ -322,6 +354,35 @@ Three caveats that matter more than the table:
 
 Reproduce: `PYTHONPATH=src python3 -m evolve.cli controllers --out <dir>
 --seeds 11 12 --ticks 120`.
+
+### Multi-scenario run — **DONE (measured), still n = 2**
+
+The same harness was run across three environments, at term `--scale 0.25
+--ticks 150 --scenarios default d f --seeds 11 12` (30 runs). This is a
+different question from the table above: not "who is best" but "does the
+ranking survive a harder world".
+
+| Controller | Mean survival | Worst survival | Persistence | Mean repro success |
+|---|---|---|---|---|
+| `rule` | 0.823 | 0.522 | 1.000 | 0.910 |
+| `forage` | 0.786 | 0.565 | 1.000 | 0.872 |
+| `random` | 0.718 | 0.526 | 1.000 | 0.415 |
+| `neural` | 0.576 | 0.286 | 1.000 | 0.833 |
+| `passive` | 0.502 | 0.316 | 1.000 | 0.000 |
+
+What separates is **conditional on the scenario**: in `default` the reflex
+policies reach 3–4× the neural arm's population (rule 527/576 vs neural
+175/180), but in the clumped-resource scenario `d` every arm collapses to
+single digits (rule 15/12, neural 8/6). That collapse is the honest result of a
+world one quarter the size with 40 % of the plants; it is **not** an extinction
+(no arm reaches zero) and it is reported, not averaged away.
+
+The paired tests still stop at **p = 0.1797** on n = 2 — the smallest value
+reachable — so even with this separation the correct statement is that the
+*effect is large and consistent across both seeds*, while *statistical support
+is absent at this sample size*. No arm is declared better. Two extra seeds
+(`--seeds 11 12 13 14`) would be the cheapest way to change that; it was not
+run here, so it is not claimed.
 
 A sensitivity smoke run (`bite`, scale 0.25, 60 ticks, seeds 11/12) gave final
 population 19.0 / 19.5 / 19.5 / 19.5 across `bite` 0.25 / 0.5 / 0.75 / 1.0 with
@@ -420,24 +481,36 @@ approximation that changes what is on screen.
 
 ## 10. Test results — **DONE**
 
-`python3 -m pytest tests/ -o addopts="" -q` → **357 passed in 176.12 s**.
-(Earlier stages of the upgrade: 343 passed in 266.55 s, then 346 in 259.34 s;
-the runtime moves with the machine's load, not with correctness.) Suite grew
-from 196 to 357 tests. No existing assertion was weakened or deleted; several
-were strengthened. The notable ones:
+`python3 -m pytest tests/ -o addopts="" -q` → **374 passed in 200.38 s**.
+(Earlier stages of the upgrade: 343 passed in 266.55 s, then 346 in 259.34 s,
+then 357 in 176.12 s, then 365 in 145.99 s; the runtime moves with the machine's
+load, not with correctness.) Suite grew from 196 to 374 tests. No existing
+assertion was weakened or deleted; several were strengthened. The notable ones:
 
 * `tests/test_optimization_equivalence.py` pins the three pre-upgrade checksums.
-* `tests/test_controllers.py` (24) covers the output contract, reproducibility,
+* `tests/test_controllers.py` (38) covers the output contract, reproducibility,
   the default path being bit-identical to a run with no controller, and the
-  controller using its **own** RNG so the engine stream is untouched.
+  controller using its **own** RNG so the engine stream is untouched. It also
+  pins the §4.2 endpoint set: every declared endpoint is present and bounded,
+  the endpoints reproduce across runs, the summary names them, a warm-up resume
+  differences the run totals from the resume point, and multi-scenario mode
+  runs every controller in every scenario × seed with a nested analysis and a
+  bounded robustness block (and rejects unknown scenario names).
 * `tests/test_sensitivity.py` (11) covers config copy-not-mutate, type
   preservation, real config fields, and extinction being reported.
-* `tests/test_metrics.py` (17) covers the appended columns and that the original
+* `tests/test_metrics.py` (21) covers the appended columns and that the original
   block is a prefix of `COLUMNS`, plus the two second-block metrics: identical
   profiles score zero, differing activity moves the score, the metric ignores
   genomes, the profile is a per-tick rate (10-tick-old and 100-tick-old animals
   with the same rate agree), and stress is sampled at the animals' cells rather
-  than world-wide.
+  than world-wide. Four more pin the cumulative run totals: they are excluded
+  from `checksum()`, they reconcile with the tick (successes ⊆ attempts,
+  assimilated energy ≤ intake, summed ages ≥ deaths), they survive their
+  organism's death, and `death_age_sum` is the exact mean-lifespan denominator.
+* `tests/test_snapshots.py` (3) now also asserts the run totals survive a
+  snapshot round-trip bit-for-bit and stay out of the checksum.
+* `tests/test_cli.py` (8) includes the new multi-scenario smoke run and the
+  unknown-scenario error.
 * `tests/test_lineage.py` (15) covers the bounded recorder, real birth traits,
   no fabrication, and that attaching it does not change the checksum.
 * `tests/test_viz_ancestry.py` (15), `test_viz_charts.py` (33),
@@ -496,6 +569,11 @@ Reported, not hidden:
   modifier at the living animals' cells; the cost it implies depends on each
   animal's basal metabolism, so two runs with the same column value need not
   have paid the same price.
+* **Cross-scenario robustness describes the declared scenarios only.** The
+  `--scenarios` table reports persistence and survival over experiments A–F/H as
+  listed; it is not a sample of environments and must not be read as a
+  generalisation to unseen worlds. The worst case is the minimum over those runs,
+  so adding a harder scenario would lower it.
 * **Controller and sensitivity results here are underpowered nulls** (n = 2,
   short horizons), not findings. The neural arm is the random shipped MLP.
 * **The viewer's frame rate is unmeasured on a desktop GPU or under a large
@@ -533,7 +611,7 @@ Each is deferred with a reason, not forgotten:
 | [`AUDIT.md`](AUDIT.md) | Phase 1 audit (unchanged since writing it; it is a before-picture) |
 | [`BENCHMARKS.md`](BENCHMARKS.md) | Optimization pass, before/after throughput, profile, memory, viewer/analytics cost |
 | [`ODD.md`](ODD.md) | Sensitivity and controller paragraphs in §2.6/§2.7 and §5 |
-| [`EXPERIMENTS.md`](EXPERIMENTS.md) | Statistics table is now 53 columns (40 + 13 appended), never reordered |
+| [`EXPERIMENTS.md`](EXPERIMENTS.md) | Statistics table is now 55 columns (40 + 13 + 2 appended), never reordered |
 | [`README.md`](README.md) | Ancestry section and key, updated status, link to this report |
 | **`UPGRADE.md`** | This report |
 
@@ -555,11 +633,11 @@ what was added around them.
 | 3. Engine optimization report | **DONE** (5 changes, 1 rejected with measurement) |
 | 4. Before/after benchmarks | **DONE** (1.8×, targets still missed) |
 | 5. Peak/steady-state memory | **DONE** (< 650 MB, no growth with run length) |
-| 6. New scientific metrics | **DONE** (13 columns, observed vs derived labelled) |
+| 6. New scientific metrics | **DONE** (15 columns in two additive blocks, observed vs derived labelled) |
 | 7. New experiment descriptions | **DONE** (harnesses) / **PARTIAL** (design-scale runs deferred) |
 | 8. Controller comparison results | **DONE** (measured; **underpowered null**) |
 | 9. Visualization changes | **DONE** (overlays, inspector, analytics, ancestry) |
-| 10. Test results | **DONE** (346 passed; 2 real bugs found by tests) |
+| 10. Test results | **DONE** (374 passed; 2 real bugs found by tests) |
 | 11. Known limitations | **DONE** (listed, not hidden) |
 | 12. Deferred improvements | **DEFERRED** (each with a reason) |
 | 13. Updated documentation | **DONE** |
