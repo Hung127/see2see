@@ -228,7 +228,7 @@ $ python3 -m pytest tests/
 No test carries the `slow` marker, so `-m "not slow"` is the full suite; the
 integration/environment tests run in ~25 s and are included.
 
-The suite grew to **187 passed in 89.40 s** with the presentation-layer tests
+The suite grew to **190 passed in 91.28 s** with the presentation-layer tests
 (`tests/test_viz_panels.py`) and the inspector id-matching regression added
 with the viewer overhaul; the numbers above are the acceptance-run record and
 are left as measured on that commit.
@@ -252,7 +252,7 @@ existing tests were renamed to the canonical name and six were written in
 | save/resume | `test_resume_equals_continuation` | `test_snapshots.py` |
 | headless | `test_headless_run` | `test_cli.py` |
 | seed reproduction | `test_seed_reproducibility` | `test_engine_m1.py` |
-| suite green | 187 passed (subsequently; 158 at acceptance) | — |
+| suite green | 190 passed (subsequently; 158 at acceptance) | — |
 | benchmarks | `BENCHMARKS.md` (targets missed, reported) | — |
 | evolved vs random | 30 paired arenas, evolved mean intake +49.93 bu (95 % CI +42.11 to +57.72), Wilcoxon p = 1.7e-6; 3 of 6 evolution replicates survived to sampling | this document, §G |
 

@@ -61,8 +61,12 @@ panel on the right, a control strip along the bottom.
   blocks eating and attacking, and those rows say so.
 * **Statistics.** Population, births/deaths/mutations, role counts, the
   conserved matter pools (plant biomass, carcasses, detritus, organism tissue,
-  soil nutrients), averages, the season phase and any active or scheduled
-  environmental event.
+  soil nutrients) **plus the total and the value it started from**, averages,
+  the season phase and any active or scheduled environmental event. The total
+  is the conservation claim made checkable: if it ever drifted, you would see
+  it there.
+* **Scrolling.** When the panel is taller than the window it fades at the edge,
+  shows a scrollbar and says "more below"; the wheel and page up/down scroll it.
 * **Extinction** is a normal outcome: the screen says `EXTINCT`, the ledger
   still balances, and `r` restarts the same seed.
 
@@ -117,7 +121,7 @@ large population, so treat frame-rate claims as unmeasured.
 
 ## Status
 
-Milestones M1–M7 are implemented and tested (187 tests). Measured throughput on
+Milestones M1–M7 are implemented and tested (190 tests). Measured throughput on
 a single-core machine misses the design's §11 targets — see
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the honest numbers. NEAT-style
 speciation (M8) is deferred.

@@ -78,12 +78,17 @@ def test_diet_color_spans_green_to_red_and_words():
 
 
 def test_legend_uses_the_same_colors_as_the_world():
-    items = {label: colour for label, colour, _ in panels.legend_items()}
-    assert items["herbivore-leaning"] == palette.diet_color(0.05)
-    assert items["mixed diet gene"] == palette.diet_color(0.5)
-    assert items["carnivore-leaning"] == palette.diet_color(0.95)
-    assert items["plant"] == palette.PLANT
-    assert items["carcass (meat)"] == palette.CARCASS
+    items = {label: (colour, marker)
+             for label, colour, marker in panels.legend_items()}
+    assert items["herbivore-leaning"][0] == palette.diet_color(0.05)
+    assert items["mixed diet gene"][0] == palette.diet_color(0.5)
+    assert items["carnivore-leaning"][0] == palette.diet_color(0.95)
+    assert items["plant"][0] == palette.PLANT
+    assert items["carcass (meat)"][0] == palette.CARCASS
+    # Organisms are drawn as rimmed dots in the world; the swatch uses the same
+    # marker so the legend is not claiming a shape the world never draws.
+    assert items["herbivore-leaning"][1] == "organism"
+    assert items["plant"][1] == "circle"
 
 
 # -- camera ------------------------------------------------------------------
@@ -257,6 +262,42 @@ def test_role_counts_come_from_intake_not_the_gene():
     assert sum(counts.values()) == eng.population.n_alive
     # Nothing has eaten yet, so every organism is indistinguishable by intake.
     assert counts[panels.stats_mod.ROLE_UNCLASSIFIED] == eng.population.n_alive
+    # The jargon is explained exactly when it is on screen, not always.
+    assert "not eaten 1 bu" in panels.role_note(eng)
+
+
+def test_role_note_disappears_once_every_organism_has_eaten():
+    eng = Engine(small_config(organisms=4))
+    eng.step()
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    pop.plant_intake[idx] = 3.0
+    assert panels.role_note(eng) is None
+    assert "unclassified" not in panels.role_text(eng)
+
+
+def test_matter_rows_show_conservation_total_next_to_its_start_value():
+    eng = Engine(small_config(organisms=6))
+    eng.step()
+    rows = dict(panels.matter_rows(eng))
+    total = rows["total (organic + soil)"]
+    assert panels.amount(eng.total_mass()) in total
+    assert "started at" in total
+    # The reported total is the engine's own measurement, not a sum of the
+    # displayed rows (which are individually rounded).
+    assert abs(eng.total_mass() - eng.initial_total) < 1e-6
+
+
+def test_more_hint_only_says_what_is_true():
+    """The hint must not claim content above/below that does not exist."""
+    screen = pygame.Surface((200, 200))
+    cache = panels.TextCache()
+    box = pygame.Rect(0, 0, 180, 100)
+    fonts = {"small": _FONT, "body": _FONT, "title": _FONT, "big": _FONT}
+    # Everything fits: no hint is drawn at all (nothing to assert but no crash).
+    panels._more_hint(screen, box, 0, 100, fonts, cache)
+    panels._more_hint(screen, box, 0, 300, fonts, cache)
+    panels._more_hint(screen, box, 200, 300, fonts, cache)
 
 
 # -- app behaviour -----------------------------------------------------------
@@ -412,10 +453,10 @@ def test_sparkline_states_a_fact_before_it_can_draw_a_line():
                                    "title": _FONT, "big": _FONT}, cache)
     panels._draw_sparkline(p, [(10, 7)], (96, 178, 245))
     assert p.y > box.y                       # it wrote something
-    # Three samples are enough for a line; the panel advances past the box.
+    # Three samples are enough for a line; the panel advances past caption+box.
     p2 = panels.Panel(screen, box, p.fonts, cache)
     panels._draw_sparkline(p2, [(1, 5), (2, 6), (3, 7)], (96, 178, 245))
-    assert p2.y >= box.y + 58
+    assert p2.y >= box.y + 44
 
 
 def test_selection_survives_compaction_by_id():

@@ -2,7 +2,7 @@
 
 The simulation never blocks on rendering: one frame pumps events, advances a
 fixed number of steps, then draws. All controls are listed in the footer and in
-the ``?`` help overlay, and the sidebar explains what every mark on screen is.
+the ``h`` help overlay, and the sidebar explains what every mark on screen is.
 
 Beginner affordances: a legend, plain-language statistics (births, deaths,
 roles by measured intake, conserved matter pools), a named environment layer,
@@ -129,7 +129,7 @@ class VizApp:
                 self.running = False
             elif key == pygame.K_PAGEUP:
                 state.help_scroll = max(0, state.help_scroll
-                                      - 8 * SCROLL_STEP)
+                                        - 8 * SCROLL_STEP)
             elif key == pygame.K_PAGEDOWN:
                 state.help_scroll += 8 * SCROLL_STEP
             return
@@ -281,6 +281,7 @@ class VizApp:
         cam.focus = self.camera.focus
         cam.zoom = self.camera.zoom
         return cam
+
     def run_frame(self) -> None:
         self._handle_events()
         if not self.state.paused:

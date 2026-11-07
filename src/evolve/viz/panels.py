@@ -51,14 +51,6 @@ KIND_INFO = {
     "plant_blight": "Plant blight — plants in the area die back to detritus.",
 }
 
-# Sensor index -> short description shown in the inspector header.
-SENSOR_NOTES = {
-    0: "distance to nearest visible plant or carcass",
-    6: "distance to the nearest visible mature mate",
-    7: "own reserve / capacity",
-}
-
-
 def _clamp01(v: float) -> float:
     return 0.0 if v != v else (1.0 if v > 1.0 else (0.0 if v < 0.0 else v))
 
@@ -97,7 +89,7 @@ def season_text(engine) -> str:
 # Legend
 # ---------------------------------------------------------------------------
 def legend_items() -> list[tuple[str, tuple[int, int, int], str]]:
-    """``(label, colour, marker)`` rows; marker is circle/square/ring.
+    """``(label, colour, marker)`` rows; marker is circle/square/organism/ring.
 
     Organism swatches go through :func:`palette.diet_color`, so the legend and
     the world cannot drift apart.
@@ -105,9 +97,9 @@ def legend_items() -> list[tuple[str, tuple[int, int, int], str]]:
     return [
         ("plant", PLANT, "circle"),
         ("carcass (meat)", CARCASS, "square"),
-        ("herbivore-leaning", diet_color(0.05), "circle"),
-        ("mixed diet gene", diet_color(0.5), "circle"),
-        ("carnivore-leaning", diet_color(0.95), "circle"),
+        ("herbivore-leaning", diet_color(0.05), "organism"),
+        ("mixed diet gene", diet_color(0.5), "organism"),
+        ("carnivore-leaning", diet_color(0.95), "organism"),
         ("selected organism", SELECTION, "ring"),
     ]
 
@@ -142,16 +134,31 @@ def role_text(engine) -> str:
     if sum(counts.values()) == 0:
         return "no living organisms"
     parts = []
-    for key, word in ((stats_mod.ROLE_HERBIVORE, "herb"),
-                      (stats_mod.ROLE_OMNIVORE, "omni"),
-                      (stats_mod.ROLE_CARNIVORE, "carn"),
-                      (stats_mod.ROLE_UNCLASSIFIED, "unclear")):
+    for key, word in ((stats_mod.ROLE_HERBIVORE, "herbivore"),
+                      (stats_mod.ROLE_OMNIVORE, "omnivore"),
+                      (stats_mod.ROLE_CARNIVORE, "carnivore"),
+                      (stats_mod.ROLE_UNCLASSIFIED, "unclassified")):
         if counts[key]:
             parts.append(f"{counts[key]} {word}")
     return " · ".join(parts)
 
 
+def role_note(engine) -> str | None:
+    """Explain "unclassified" only when it is actually on screen."""
+    counts = role_counts(engine)
+    if not counts.get(stats_mod.ROLE_UNCLASSIFIED):
+        return None
+    return ("unclassified means it has not eaten 1 bu yet, so there is not "
+            "enough evidence to call it anything")
+
+
 def matter_rows(engine) -> list[tuple[str, str]]:
+    """The matter pools, then the total that conservation holds fixed.
+
+    The total is the point: it is what makes "plants and animals are made of
+    soil" a measurable claim rather than a slogan, so it is shown next to the
+    value it started from.
+    """
     pop = engine.population
     idx = np.flatnonzero(pop.alive)
     reserve = float(pop.energy[idx].sum()) if idx.size else 0.0
@@ -163,6 +170,9 @@ def matter_rows(engine) -> list[tuple[str, str]]:
         ("detritus", f"{amount(engine.detritus)} bu"),
         ("organism tissue", f"{amount(body + reserve)} bu"),
         ("soil nutrients", f"{amount(engine.soil_stock())} bu"),
+        ("total (organic + soil)", f"{amount(engine.total_mass())} bu "
+                                   f"· started at "
+                                   f"{amount(engine.initial_total)} bu"),
     ]
 
 
@@ -510,6 +520,11 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
     status = "PAUSED — SPACE to run" if state.paused else f"RUNNING  {state.speed}×"
     status_color = WARN if state.paused else GOOD
     p.row(f"tick {engine.tick:,}", status, status_color)
+    if getattr(state, "follow", False) and state.selected_id is not None:
+        # Without a marker the camera appears to drift on its own, which reads
+        # as a bug rather than as "you pressed F".
+        p.wrapped(f"camera following organism {state.selected_id} "
+                  "(F to stop)", ACCENT, "small")
     if getattr(state, "selected_gone", False):
         p.wrapped("The organism you were inspecting died. The panel is back "
                   "to the population view; click another dot to inspect it.",
@@ -543,14 +558,10 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
         state.content_height = p.content_height()
         screen.set_clip(None)
         _panel_fades(screen, inner, state.scroll, state.content_height)
+        _more_hint(screen, inner, state.scroll, state.content_height,
+                   fonts, cache)
         _draw_scrollbar(screen, rect, state)
         return
-
-    p.section("what you are seeing")
-    p.wrapped("Dots are organisms, green specks are plants, brown lumps are "
-              "carcasses. Background shading is the environment layer named "
-              "in the corner badge; organism colour is its inherited diet "
-              "gene, not its behaviour.", TEXT_DIM, "small")
 
     p.section("legend")
     _draw_legend(p)
@@ -560,6 +571,9 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
     p.text("organisms alive", TEXT_DIM, "small")
     p.wrapped(births_deaths_text(engine), TEXT_DIM, "small")
     p.wrapped("roles by lifetime intake: " + role_text(engine), TEXT_DIM, "small")
+    note = role_note(engine)
+    if note:
+        p.wrapped(note, TEXT_FAINT, "small")
     p.gap(4)
     p.text("population, recent frames", TEXT_FAINT, "small")
     _draw_sparkline(p, state.history, (96, 178, 245))
@@ -588,6 +602,7 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
     state.content_height = p.content_height()
     screen.set_clip(None)
     _panel_fades(screen, inner, state.scroll, state.content_height)
+    _more_hint(screen, inner, state.scroll, state.content_height, fonts, cache)
     _draw_scrollbar(screen, rect, state)
 
 
@@ -599,19 +614,35 @@ CONTROL_LINES = (
 )
 
 
+_FADE_CACHE: dict[tuple, pygame.Surface] = {}
+
+
 def _fade_edge(screen: pygame.Surface, rect: pygame.Rect, at_bottom: bool,
                colour: tuple[int, int, int], height: int = 26) -> None:
     """Soften a panel edge so scrolled text does not end mid-glyph.
 
     Without this the last visible line is sliced in half at the panel border,
     which reads as a rendering fault rather than as "there is more below".
+    The gradient strip is cached: building a per-pixel surface every frame is
+    wasted work on the single-core target machine.
     """
     height = min(height, max(1, rect.height // 3))
-    strip = pygame.Surface((rect.width, height), pygame.SRCALPHA)
-    for row in range(height):
-        frac = (row + 1) / height
-        alpha = int(255 * (frac if at_bottom else 1.0 - frac))
-        strip.fill((*colour, alpha), pygame.Rect(0, row, rect.width, 1))
+    key = (rect.width, height, bool(at_bottom), colour)
+    strip = _FADE_CACHE.get(key)
+    if strip is None:
+        if len(_FADE_CACHE) > 24:
+            _FADE_CACHE.clear()
+        strip = pygame.Surface((rect.width, height), pygame.SRCALPHA)
+        for row in range(height):
+            frac = (row + 1) / height
+            # 0 at the outer edge of the strip, 1 at the panel border. The
+            # square root ramps up fast: a linear ramp left a half-legible
+            # slice of the next line right at the border, and that slice is
+            # exactly the artefact this is meant to hide.
+            t = frac if at_bottom else 1.0 - frac
+            strip.fill((*colour, int(255 * float(t) ** 0.5)),
+                       pygame.Rect(0, row, rect.width, 1))
+        _FADE_CACHE[key] = strip
     y = rect.bottom - height if at_bottom else rect.y
     screen.blit(strip, (rect.x, y))
 
@@ -622,14 +653,26 @@ def _draw_legend(p: Panel) -> None:
         cy = p.y + font.get_linesize() // 2
         cx = p.rect.x + p._pad + 5
         if marker == "circle":
-            pygame.draw.circle(p.screen, color, (cx, cy), 5)
+            pygame.draw.circle(p.screen, color, (cx, cy), 3)
         elif marker == "square":
             pygame.draw.rect(p.screen, color, (cx - 4, cy - 4, 9, 9))
+        elif marker == "organism":
+            # Same rim-plus-fill the world uses, so the swatch is the sprite.
+            rim = (int(color[0] * 0.35), int(color[1] * 0.35),
+                   int(color[2] * 0.35))
+            pygame.draw.circle(p.screen, rim, (cx, cy), 4)
+            pygame.draw.circle(p.screen, color, (cx, cy), 3)
         else:
-            pygame.draw.circle(p.screen, color, (cx, cy), 7, 1)
+            pygame.draw.circle(p.screen, color, (cx, cy), 6, 1)
         p.screen.blit(p.cache.render(font, label, TEXT_DIM),
                       (p.rect.x + p._pad + 18, p.y))
         p.y += font.get_linesize()
+    p.gap(2)
+    # One sentence under the swatches: the colour is a gene, not behaviour, and
+    # the background is a layer the badge names. Both are easy to misread.
+    p.wrapped("organism colour is its inherited diet gene, not what it ate; "
+              "the background is the environmental layer named in the corner.",
+              TEXT_FAINT, "small")
 
 
 def _draw_sparkline(p: Panel, history: list[tuple[int, int]],
@@ -639,7 +682,7 @@ def _draw_sparkline(p: Panel, history: list[tuple[int, int]],
     With one or two samples a line means nothing, so the box is skipped and the
     current count is shown instead: the reader gets a fact, not an empty chart.
     """
-    height = 58
+    height = 44
     width = p.rect.width - 2 * p._pad
     x0 = p.rect.x + p._pad
     y0 = p.y
@@ -653,21 +696,22 @@ def _draw_sparkline(p: Panel, history: list[tuple[int, int]],
     peak = max(1, max(values))
     n = len(values)
     step = width / max(1, n - 1)
-    points = [(int(x0 + i * step),
-               int(y0 + height - 3 - (height - 24) * v / peak))
-              for i, v in enumerate(values)]
-    pygame.draw.rect(p.screen, (30, 34, 41), (x0, y0, width, height))
-    if len(points) > 1:
-        pygame.draw.lines(p.screen, color, False, points, 2)
+    # The caption is a line of its own: drawn inside the box it collided with
+    # the plotted line and with the peak label.
     small = p.fonts["small"]
-    top = p.cache.render(small, f"peak {peak}", TEXT_FAINT)
-    p.screen.blit(top, (x0 + 5, y0 + height - top.get_height() - 1))
     change = last - first
     word = "up" if change > 0 else ("down" if change < 0 else "flat")
-    tick = p.cache.render(
-        small, f"{first} then {last} ({word})", TEXT_FAINT)
-    p.screen.blit(tick, (x0 + 5, y0 + 1))
-    p.y += height + 5
+    caption = p.cache.render(
+        small, f"was {first}, now {last} ({word}) · peak {peak}", TEXT_FAINT)
+    p.screen.blit(caption, (x0, y0))
+    top = y0 + caption.get_height() + 2
+    points = [(int(x0 + i * step),
+               int(top + height - 3 - (height - 12) * v / peak))
+              for i, v in enumerate(values)]
+    pygame.draw.rect(p.screen, (30, 34, 41), (x0, top, width, height))
+    if len(points) > 1:
+        pygame.draw.lines(p.screen, color, False, points, 2)
+    p.y = top + height + 5
 
 
 def _scrollbar(screen: pygame.Surface, rect: pygame.Rect, content: int,
@@ -699,6 +743,27 @@ def _panel_fades(screen: pygame.Surface, inner: pygame.Rect, scroll: int,
             _fade_edge(screen, inner, False, colour)
         if scroll + inner.height < content_height:
             _fade_edge(screen, inner, True, colour)
+
+
+def _more_hint(screen: pygame.Surface, inner: pygame.Rect, scroll: int,
+               content_height: int, fonts: dict, cache: TextCache) -> None:
+    """Say "more below" in words, in the gutter under the text box.
+
+    The fade and scrollbar show that something continues, but a first-time
+    reader does not necessarily know that the wheel scrolls *this* panel.
+    """
+    if content_height <= inner.height:
+        return
+    below = scroll + inner.height < content_height
+    above = scroll > 0
+    if not (below or above):
+        return
+    text = ("more below — scroll" if below and not above
+            else "more above" if above and not below
+            else "more above and below")
+    surf = cache.render(fonts["small"], text, TEXT_FAINT)
+    screen.blit(surf, (inner.right - surf.get_width(),
+                       inner.bottom + 3))
 
 
 def _draw_scrollbar(screen: pygame.Surface, rect: pygame.Rect, state) -> None:
@@ -830,7 +895,9 @@ def draw_help(screen: pygame.Surface, rect: pygame.Rect,
     # gutter to the right of the column holds the scrollbar. ``inflate`` already
     # centres, so no extra offset here.
     inner = rect.inflate(-120, -140)
-    width = min(inner.w - 60, 940)
+    # ~80 characters per line: at 940 px the guide read as a wall of text and
+    # the eye lost its place between lines.
+    width = min(inner.w - 60, 760)
     inner = pygame.Rect(inner.x + (inner.w - width) // 2, inner.y,
                         width, inner.h)
     # Clamp with the real text-viewport height, not an approximation, or the

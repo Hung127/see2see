@@ -59,12 +59,17 @@ def _on_screen(camera: Camera, sx: int, sy: int, margin: int) -> bool:
             and -margin <= sy <= camera.screen_h + margin)
 
 
+def _rim(color: tuple[int, int, int]) -> tuple[int, int, int]:
+    """A darker version of a body colour, used as a one-pixel outline."""
+    return (int(color[0] * 0.35), int(color[1] * 0.35), int(color[2] * 0.35))
+
+
 def _draw_plants(engine: Engine, screen: pygame.Surface, camera: Camera) -> None:
     plants = engine.plants
     idx = np.flatnonzero(plants.alive)
     if idx.size == 0:
         return
-    radius = camera.scale(1.5)
+    radius = max(1, camera.scale(1.2))
     for i in idx:
         sx, sy = camera.to_screen(plants.x[i], plants.y[i])
         if _on_screen(camera, sx, sy, radius):
@@ -89,10 +94,17 @@ def _draw_organisms(engine: Engine, screen: pygame.Surface, camera: Camera) -> N
     phen = pop.phenotypes()
     for row, i in enumerate(idx):
         sx, sy = camera.to_screen(pop.x[i], pop.y[i])
-        radius = camera.scale(max(1.5, 2.0 * float(phen[row, 0]) ** 0.5))
-        if _on_screen(camera, sx, sy, radius):
-            pygame.draw.circle(screen, diet_color(float(phen[row, 9])),
-                               (sx, sy), radius)
+        # At least 3 px: a 1-px dot with a rim is indistinguishable from a
+        # plant speck, and telling "alive" from "plant" is the first thing a
+        # beginner needs to do.
+        radius = max(3, camera.scale(max(1.5, 2.0 * float(phen[row, 0]) ** 0.5)))
+        if not _on_screen(camera, sx, sy, radius):
+            continue
+        color = diet_color(float(phen[row, 9]))
+        # Dark rim: without it a herbivore-leaning animal is the same green
+        # blob as a plant, and a beginner cannot tell which specks are alive.
+        pygame.draw.circle(screen, _rim(color), (sx, sy), radius)
+        pygame.draw.circle(screen, color, (sx, sy), radius - 1)
 
 
 def draw_selection(engine: Engine, screen: pygame.Surface, camera: Camera,
