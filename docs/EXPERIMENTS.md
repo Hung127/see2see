@@ -20,9 +20,11 @@ PYTHONPATH=src python3 -m evolve.cli experiments --id g --out experiments_out/g
 PYTHONPATH=src python3 -m evolve.cli experiments --all --full --out experiments_out/full
 ```
 
-Each experiment writes `<out>/<id>/` containing `stats.csv` (the 40-column
-statistics table), seven PNGs, and `summary.md`. `--all` additionally writes
-`index.md`. The assay also writes `pre_registration.md` and `assay.csv`.
+Each experiment writes `<out>/<id>/` containing `stats.csv` (the
+[`stats.COLUMNS`](../src/evolve/stats.py) wide table — 53 columns: the original
+40, then 13 appended in the upgrade, never reordered), seven PNGs, and
+`summary.md`. `--all` additionally writes `index.md`. The assay also writes
+`pre_registration.md` and `assay.csv`.
 
 ## Configurations and hooks
 
