@@ -15,6 +15,39 @@ import numpy as np
 from .world import World
 
 
+def best_per_query(rep: np.ndarray, d: np.ndarray,
+                   ties: tuple[np.ndarray, ...] = (),
+                   n_query: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """Winner row per query: lowest ``d``, then the ``ties`` keys, then the
+    earliest row.
+
+    This produces exactly what ``np.lexsort`` over ``(*ties, d, rep)`` followed
+    by "first row per ``rep`` group" produces, but it does not sort the whole
+    candidate list. On a dense world ``candidates`` returns millions of rows
+    while almost all of them are strictly farther than their query's nearest,
+    so a pairwise minimum per query leaves a handful to tie-break. Both orderings
+    are stable and ``rep`` arrives grouped, so the surviving row is the same.
+
+    Returns ``(queries, rows)``: the ascending query indices that had at least
+    one candidate, and each one's winning row index.
+    """
+    if rep.size == 0:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    alive = np.ones(rep.size, dtype=bool)
+    best = np.full(n_query, np.inf)
+    np.minimum.at(best, rep, d)
+    alive &= d <= best[rep]
+    for tie in ties:
+        best_t = np.full(n_query, np.iinfo(np.int64).max, dtype=np.int64)
+        np.minimum.at(best_t, rep[alive], tie[alive])
+        alive &= tie <= best_t[rep]
+    pos = np.flatnonzero(alive)
+    first = np.full(n_query, pos.max() + 1, dtype=np.int64)
+    np.minimum.at(first, rep[pos], pos)
+    queries = np.flatnonzero(np.bincount(rep, minlength=n_query))
+    return queries, first[queries]
+
+
 class SpatialGrid:
     def __init__(self, world: World, cell: float = 80.0) -> None:
         self.world = world
@@ -112,6 +145,12 @@ class SpatialGrid:
         return lo[order], hi[order]
 
     # -- queries -------------------------------------------------------------
+    def best_per_query(self, rep: np.ndarray, d: np.ndarray,
+                       ties: tuple[np.ndarray, ...] = (),
+                       n_query: int = 0) -> tuple[np.ndarray, np.ndarray]:
+        """Delegate to :func:`best_per_query` for API convenience."""
+        return best_per_query(rep, d, ties, n_query)
+
     def candidates(self, qx: np.ndarray, qy: np.ndarray,
                    radius_cells: int = 2) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """All ``(query, target, distance)`` triples within the stencil.

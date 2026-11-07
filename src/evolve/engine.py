@@ -33,7 +33,7 @@ from .organisms import Population
 from .plants import Plants
 from .rng import Rng
 from .sensors import collect
-from .spatial import SpatialGrid
+from .spatial import SpatialGrid, best_per_query as _best_per_query
 from .world import World
 
 _EPS = 1e-12
@@ -284,19 +284,24 @@ class Engine:
 
         grid = SpatialGrid(self.world, cell=80.0)
         grid.build(rx, ry)
-        rep, tgt, dist = grid.candidates(pop.x, pop.y, radius_cells=2)
-        keep = actions.eat[rep] & (dist <= reach[rep])
+        # Query only the eaters. Building candidates for the whole population and
+        # then discarding ~most of them cost the same as the sensing grid, and
+        # the eater list is ascending, so the per-row order (and therefore the
+        # tie-break below) is identical to the previous full-population query.
+        rep, tgt, dist = grid.candidates(pop.x[eaters], pop.y[eaters],
+                                         radius_cells=2)
+        rep = eaters[rep]
+        keep = dist <= reach[rep]
         rep, tgt, dist = rep[keep], tgt[keep], dist[keep]
         if rep.size == 0:
             return
 
-        # Nearest resource per eater; ties by (kind, resource ID).
-        order = np.lexsort((rid[tgt], kind[tgt], dist, rep))
-        rep, tgt, dist = rep[order], tgt[order], dist[order]
-        first = np.ones(rep.size, dtype=bool)
-        first[1:] = rep[1:] != rep[:-1]
-        rows = rep[first]
-        target = tgt[first]
+        # Nearest resource per eater; ties by (kind, resource ID). Same winners
+        # as a full lexsort, without sorting every candidate (see
+        # ``spatial.best_per_query``).
+        rows, pick = _best_per_query(rep, dist, (kind[tgt], rid[tgt]),
+                                     pop.alive.size)
+        target = tgt[pick]
 
         demand = np.minimum.reduce([
             bite_rate[rows],
@@ -377,19 +382,21 @@ class Engine:
 
         grid = SpatialGrid(self.world, cell=80.0)
         grid.build(pop.x, pop.y)
-        rep, tgt, dist = grid.candidates(pop.x, pop.y, radius_cells=2)
-        keep = actions.attack[rep] & (tgt != rep) & (dist <= reach[rep])
+        # Query only the attackers, as in ``_feed``: the discarded rows were the
+        # majority of the population, and ``attackers`` is ascending so each
+        # attacker's candidate order — hence the ID tie-break below — is unchanged.
+        rep, tgt, dist = grid.candidates(pop.x[attackers], pop.y[attackers],
+                                         radius_cells=2)
+        rep = attackers[rep]
+        keep = (tgt != rep) & (dist <= reach[rep])
         rep, tgt, dist = rep[keep], tgt[keep], dist[keep]
         if rep.size == 0:
             return
 
-        # Nearest target per attacker; ties by lowest target ID.
-        order = np.lexsort((pop.id[tgt], dist, rep))
-        rep, tgt = rep[order], tgt[order]
-        first = np.ones(rep.size, dtype=bool)
-        first[1:] = rep[1:] != rep[:-1]
-        rows = rep[first]
-        target = tgt[first]
+        # Nearest target per attacker; ties by lowest target ID. Single pass, no
+        # full sort — ``best_per_query`` is the same winner rule as the lexsort.
+        rows, pick = _best_per_query(rep, dist, (pop.id[tgt],), pop.alive.size)
+        target = tgt[pick]
 
         # Strike cost: 0.05 * attack per actual strike (no target -> no attempt).
         cost = np.minimum(self.cfg.energy.strike_cost * phen[rows, 5],

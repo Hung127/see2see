@@ -16,7 +16,7 @@ from .fields import Fields
 from .genome import phenotype
 from .organisms import Population
 from .plants import Plants
-from .spatial import SpatialGrid
+from .spatial import SpatialGrid, best_per_query as _best_per_query
 from .world import World
 
 N_INPUTS = 16
@@ -27,24 +27,37 @@ def _nearest_visible(rep_q: np.ndarray, t_idx: np.ndarray, d: np.ndarray,
                      rvis: np.ndarray, half_angle: np.ndarray,
                      world: World, tx: np.ndarray, ty: np.ndarray,
                      n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Nearest visible target per query; ties by lowest target index."""
+    """Nearest visible target per query; ties by lowest target index.
+
+    The distance test runs *before* the bearing is computed: the stencil hands
+    back roughly 144 candidates per query while a vision cone keeps a handful,
+    so computing ``arctan2`` for all of them was the single largest cost in
+    sensing. Filtering first changes no result — a candidate outside the radius
+    was already excluded by ``(d <= rvis) & (|bearing| <= half_angle)``.
+    """
     if rep_q.size == 0:
         return np.full(n, -1, dtype=np.int64), np.full(n, np.inf), np.zeros(n)
+    near = d <= rvis[rep_q]
+    if not np.any(near):
+        return np.full(n, -1, dtype=np.int64), np.full(n, np.inf), np.zeros(n)
+    rep_q, t_idx, d = rep_q[near], t_idx[near], d[near]
     bearing = world.bearing(qx[rep_q], qy[rep_q], tx[t_idx], ty[t_idx], heading[rep_q])
-    vis = (d <= rvis[rep_q]) & (np.abs(bearing) <= half_angle[rep_q])
+    vis = np.abs(bearing) <= half_angle[rep_q]
     if not np.any(vis):
         return np.full(n, -1, dtype=np.int64), np.full(n, np.inf), np.zeros(n)
     rep_q, t_idx, d, bearing = rep_q[vis], t_idx[vis], d[vis], bearing[vis]
-    order = np.lexsort((t_idx, d, rep_q))
-    rep_q, t_idx, d, bearing = rep_q[order], t_idx[order], d[order], bearing[order]
-    first = np.ones(rep_q.size, dtype=bool)
-    first[1:] = rep_q[1:] != rep_q[:-1]
+    # Nearest visible target per query, ties by lowest target index. The
+    # candidate list is large (a 5x5 stencil) so this is the tick's busiest
+    # selection; ``best_per_query`` gets the same winners without sorting all
+    # of it. ``rep_q`` is already grouped by query because ``candidates`` emits
+    # it in query order, so row order is the final tie-break in both forms.
+    winners, rows = _best_per_query(rep_q, d, (t_idx,), n)
     best_idx = np.full(n, -1, dtype=np.int64)
     best_dist = np.full(n, np.inf)
     best_bearing = np.zeros(n)
-    best_idx[rep_q[first]] = t_idx[first]
-    best_dist[rep_q[first]] = d[first]
-    best_bearing[rep_q[first]] = bearing[first]
+    best_idx[winners] = t_idx[rows]
+    best_dist[winners] = d[rows]
+    best_bearing[winners] = bearing[rows]
     return best_idx, best_dist, best_bearing
 
 
@@ -77,9 +90,12 @@ def collect(pop: Population, plants: Plants, fields: Fields, world: World,
     a, b = grid.pairs(radius_cells=2)
     src = np.concatenate([a, b])
     tgt = np.concatenate([b, a])
-    d = world.distance(qx[src], qy[src], qx[tgt], qy[tgt])
-    bearing = world.bearing(qx[src], qy[src], qx[tgt], qy[tgt], heading[src])
-    vis = (d <= rvis[src]) & (np.abs(bearing) <= half_angle[src])
+    # One displacement for both distance and bearing: the wrap was computed
+    # twice per pair before.
+    d, bearing = world.distance_and_bearing(qx[src], qy[src],
+                                            qx[tgt], qy[tgt], heading[src])
+    near = d <= rvis[src]
+    vis = near & (np.abs(bearing) <= half_angle[src])
 
     m_src = mass[src]
     m_tgt = mass[tgt]
@@ -138,8 +154,18 @@ def collect(pop: Population, plants: Plants, fields: Fields, world: World,
     out[:, 10] = np.clip((env["temperature"] - 20.0) / 15.0, -1.0, 1.0)
     out[:, 11] = np.clip(2.0 * env["moisture"] - 1.0, -1.0, 1.0)
     cix, ciy = fields.cell_index(qx, qy)
-    out[:, 12] = np.clip(2.0 * plants.biomass_field(fields)[cix, ciy] / 10.0 - 1.0,
-                         -1.0, 1.0)
+    # Only the cells the organisms stand in are read, so bin the plants into a
+    # flat index once and gather, instead of building the whole n x n field.
+    # ``bincount(ix*n + iy)`` accumulates in plant order, the same order as
+    # ``np.add.at(out, (ix, iy), w)``, so the sums are bit-identical.
+    p_idx = np.flatnonzero(plants.alive)
+    if p_idx.size:
+        pix, piy = fields.cell_index(plants.x[p_idx], plants.y[p_idx])
+        biomass = np.bincount(pix * fields.n + piy,
+                              weights=plants.biomass[p_idx],
+                              minlength=fields.n ** 2)
+        out[:, 12] = np.clip(
+            2.0 * biomass[cix * fields.n + ciy] / 10.0 - 1.0, -1.0, 1.0)
     counts = np.bincount(ciy * fields.n + cix, minlength=fields.n ** 2)
     out[:, 13] = np.clip(2.0 * counts[ciy * fields.n + cix] / 20.0 - 1.0, -1.0, 1.0)
     out[:, 14] = np.clip(env["pheromone"], -1.0, 1.0)
