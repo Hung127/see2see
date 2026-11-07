@@ -98,14 +98,26 @@ class Tree:
     dead: int = 0
     unknown: int = 0
     max_children: int = 0
+    # Generation range over every node the view actually draws (chain and
+    # descendant tree). Computed during the walk; ``None`` when no drawn node
+    # carries a generation. Deriving this from the chain alone reported
+    # "generation 0" while the tree below it spanned generations 0–4.
+    gen_lo: int | None = None
+    gen_hi: int | None = None
 
     @property
     def generations(self) -> tuple[int, int] | None:
-        gens = [n.generation for n in self.chain + [self.root] if n is not None]
-        gens = [g for g in gens if g is not None]
-        if not gens:
+        if self.gen_lo is None or self.gen_hi is None:
             return None
-        return min(gens), max(gens)
+        return self.gen_lo, self.gen_hi
+
+    def note_generation(self, value: int | None) -> None:
+        if value is None:
+            return
+        if self.gen_lo is None or value < self.gen_lo:
+            self.gen_lo = value
+        if self.gen_hi is None or value > self.gen_hi:
+            self.gen_hi = value
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +332,7 @@ def build_tree(engine, root_id: int | None = None) -> Tree:
             tree.dead += 1
         else:
             tree.unknown += 1
+        tree.note_generation(node.generation)
         tree.max_children = max(tree.max_children, len(node.children))
         for child in node.children:
             walk(child)
@@ -328,6 +341,8 @@ def build_tree(engine, root_id: int | None = None) -> Tree:
     for node in chain:
         if node.org_id < 0:
             tree.unknown += 1
+        else:
+            tree.note_generation(node.generation)
     return tree
 
 

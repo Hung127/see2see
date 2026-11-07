@@ -123,6 +123,27 @@ def test_tree_counts_match_the_nodes_it_actually_drew():
     assert tree.unknown == sum(1 for n in seen if n.org_id < 0)
 
 
+def test_generation_span_covers_every_drawn_node():
+    """The header span must include the descendants, not only the chain.
+
+    Deriving it from the ancestor chain reported "generation 0" above a tree
+    that visibly spanned generations 0-4, which reads as a broken counter.
+    """
+    eng = _engine_with_records()
+    tree = ancestry.build_tree(eng)
+    drawn = []
+    if tree.root is not None:
+        def walk(node):
+            drawn.append(node.generation)
+            for child in node.children:
+                walk(child)
+        walk(tree.root)
+    drawn += [n.generation for n in tree.chain if n.org_id >= 0]
+    gens = [g for g in drawn if g is not None]
+    assert gens, "fixture drew no generation-labelled node"
+    assert tree.generations == (min(gens), max(gens))
+
+
 def test_tree_is_capped_so_one_lineage_cannot_make_a_frame_unbounded():
     """Depth and node budgets must be reported, never silently applied."""
     eng = _engine_with_records()
