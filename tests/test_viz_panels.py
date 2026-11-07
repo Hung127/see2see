@@ -504,10 +504,10 @@ def test_sparkline_never_reports_zero_beside_a_live_population():
     eng = Engine(small_config(organisms=6))
     app = VizApp(eng, speed=1)
     app.state.paused = True
-    app.run_frame()                       # paused: no history is recorded
-    assert app.state.history == []
+    app.run_frame()
     assert eng.population.n_alive > 0
-    # The drawn text comes from the engine count, not from the empty history.
+    assert app.state.history == [(0, eng.population.n_alive)]
+    # The drawn text agrees with the engine count, never with a missing sample.
     captured: list[str] = []
     original = panels.Panel.text
 
@@ -522,6 +522,16 @@ def test_sparkline_never_reports_zero_beside_a_live_population():
         panels.Panel.text = original
     assert f"{eng.population.n_alive} right now" in captured
     assert "0 right now" not in captured
+    # Holding the viewer paused adds no duplicate samples: the chart must not
+    # read as a flat line that never moves.
+    for _ in range(3):
+        app.run_frame()
+    assert len(app.state.history) == 1
+    # Stepping with S while paused does advance the chart.
+    app.handle_key(pygame.K_s)
+    app.run_frame()
+    assert len(app.state.history) == 2
+    assert app.state.history[-1][0] == eng.tick == 1
 
 
 def test_restart_clears_the_previous_runs_history():

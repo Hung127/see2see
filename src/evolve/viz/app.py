@@ -308,15 +308,21 @@ class VizApp:
             for _ in range(self.state.speed):
                 self.engine.step()
             self._refresh_selection()
-            self._record_history()
+        # Sampled outside the pause branch so a paused reader stepping with S
+        # also moves the population line: otherwise the world advanced and the
+        # chart did not, which looks like the sparkline is broken.
+        self._record_history()
         self.render()
         pygame.display.flip()
         self.clock.tick(60)
 
     def _record_history(self, cap: int = 240) -> None:
-        """Population sparkline samples, one per rendered *frame* (not tick)."""
+        """Population sparkline samples, one per rendered frame that advanced."""
         hist = self.state.history
-        hist.append((self.engine.tick, self.engine.population.n_alive))
+        tick = self.engine.tick
+        if hist and hist[-1][0] == tick:
+            return              # paused: nothing new happened, keep the sample
+        hist.append((tick, self.engine.population.n_alive))
         if len(hist) > cap:
             del hist[:len(hist) - cap]
 

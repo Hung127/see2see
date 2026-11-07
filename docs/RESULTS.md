@@ -228,7 +228,7 @@ $ python3 -m pytest tests/
 No test carries the `slow` marker, so `-m "not slow"` is the full suite; the
 integration/environment tests run in ~25 s and are included.
 
-The suite grew to **196 passed in 81.89 s** with the presentation-layer tests
+The suite grew to **196 passed in 84.24 s** with the presentation-layer tests
 (`tests/test_viz_panels.py`) and the inspector id-matching regression added
 with the viewer overhaul; the numbers above are the acceptance-run record and
 are left as measured on that commit.
