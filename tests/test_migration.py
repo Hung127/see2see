@@ -89,6 +89,9 @@ def test_migrated_database_accepts_new_rows(tmp_path):
         assert read["tick"] == eng.tick
         assert read["birth_rate"] == row["birth_rate"]
         assert "survival_median" in read
+        # The §5 flag is an INTEGER column, so it reads back as an int.
+        assert isinstance(read["bottleneck"], int)
+        assert read["population_drop"] == row["population_drop"]
     finally:
         db.close()
 

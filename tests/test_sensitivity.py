@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import csv
 
+import numpy as np
 import pytest
 
 from evolve.config import (
     Config, EnergyConfig, EnvironmentConfig, GeneticsConfig, OrganismConfig,
     PlantConfig, StatsConfig, WorldConfig,
 )
-from evolve.sensitivity import SWEEPS, Sweep, _set_parameter, run_sweep
+from evolve.genome import TRAIT_NAMES
+from evolve.sensitivity import (
+    SWEEPS, Sweep, _set_parameter, _trait_locus, run_sweep,
+)
 
 
 def make_config(seed=1, ticks=30):
@@ -71,6 +75,13 @@ def test_declared_sweeps_reference_real_config_fields():
     """A typo in a sweep declaration must fail here, not silently at run time."""
     base = make_config()
     for key, decl in SWEEPS.items():
+        if decl.is_trait:
+            # A trait sweep names a real locus and never touches the config.
+            assert decl.trait in TRAIT_NAMES, key
+            assert decl.parameter == f"trait.{decl.trait}", key
+            locus = _trait_locus(decl.trait, decl.values[0])
+            assert 0.0 <= locus <= 1.0, key
+            continue
         changed = _set_parameter(base, decl.parameter, decl.values[0])
         assert changed is not base, key
 
@@ -140,3 +151,82 @@ def test_sweep_reports_extinction_rather_than_hiding_it(tmp_path):
     assert any("extinct" in row for row in report["rows"])
     for row in report["rows"]:
         assert isinstance(row["extinct"], bool)
+
+
+# -- IMPROVE §3.4: trait-level sweeps (founder genome loci) -------------------
+def test_trait_locus_inverts_the_gene_map():
+    """A physical value must map to the locus that reproduces it exactly."""
+    from evolve.genome import GENE_SPECS, phenotype
+
+    for spec in GENE_SPECS:
+        # Sample the declared span; for exp genes use positive interior points.
+        if spec.kind == "exp":
+            values = (spec.lo, spec.lo * 4.0, spec.hi)
+        else:
+            values = (spec.lo, 0.5 * (spec.lo + spec.hi), spec.hi)
+        for value in values:
+            locus = _trait_locus(spec.name, value)
+            assert 0.0 <= locus <= 1.0
+            genes = np.zeros((1, len(GENE_SPECS)))
+            genes[0, TRAIT_NAMES.index(spec.name)] = locus
+            got = phenotype(genes)[0, TRAIT_NAMES.index(spec.name)]
+            assert got == pytest.approx(value, rel=1e-9, abs=1e-9)
+
+
+def test_trait_locus_rejects_out_of_range_and_unknown():
+    with pytest.raises(ValueError, match="outside"):
+        _trait_locus("vision_range", 10_000.0)
+    # ``lifespan`` is log-mapped, so a non-positive value has no locus.
+    with pytest.raises(ValueError, match="positive"):
+        _trait_locus("lifespan", 0.0)
+    with pytest.raises(ValueError, match="unknown trait"):
+        _trait_locus("nope", 1.0)
+
+
+def test_sweep_validates_trait_declarations():
+    with pytest.raises(ValueError, match="unknown trait"):
+        Sweep("x", "trait.nope", (1.0, 2.0), 1.0, "h", "r", trait="nope")
+    with pytest.raises(ValueError, match="must name"):
+        Sweep("x", "energy.bite", (1.0, 2.0), 1.0, "h", "r",
+              trait="vision_range")
+    ok = Sweep("x", "trait.vision_range", (60.0, 100.0), 100.0, "h", "r",
+               trait="vision_range")
+    assert ok.is_trait
+    assert not SWEEPS["bite"].is_trait
+
+
+def test_trait_sweep_leaves_the_base_config_alone_and_is_reproducible(tmp_path):
+    from dataclasses import asdict
+
+    from evolve.config import load_config
+    from evolve.sensitivity import CONFIGS_DIR, DEFAULT_CONFIG
+
+    import os
+
+    base = load_config(os.path.join(CONFIGS_DIR, DEFAULT_CONFIG))
+    snapshot = asdict(base)
+    a = run_sweep(str(tmp_path / "a"), sweep="vision_range", seeds=(11,),
+                  ticks=20, scale=0.15)
+    b = run_sweep(str(tmp_path / "b"), sweep="vision_range", seeds=(11,),
+                  ticks=20, scale=0.15)
+    assert asdict(load_config(os.path.join(CONFIGS_DIR, DEFAULT_CONFIG))) == snapshot
+    assert [r["checksum"] for r in a["rows"]] == [r["checksum"] for r in b["rows"]]
+    # Different values must actually change the engine's state.
+    assert len({r["checksum"] for r in a["rows"]}) > 1
+
+
+def test_trait_sweep_refuses_body_size():
+    from evolve.sensitivity import _run_one
+
+    with pytest.raises(ValueError, match="cannot be swept"):
+        _run_one(make_config(), 11, trait="body_size", trait_value=1.0)
+
+
+def test_trait_sweep_summary_names_the_variable_kind(tmp_path):
+    run_sweep(str(tmp_path), sweep="metabolic_rate", seeds=(11,), ticks=10,
+              scale=0.12)
+    text = (tmp_path / "summary.md").read_text()
+    assert "founder trait locus" in text
+    assert "config coefficient" not in text.split("## `metabolic_rate`")[1] \
+        .split("## Limitations")[0]
+

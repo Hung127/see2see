@@ -21,9 +21,9 @@ PYTHONPATH=src python3 -m evolve.cli experiments --all --full --out experiments_
 ```
 
 Each experiment writes `<out>/<id>/` containing `stats.csv` (the
-[`stats.COLUMNS`](../src/evolve/stats.py) wide table — 55 columns: the original
-40, then 15 appended in the upgrade (13 in the first additive block, 2 in the
-second), never reordered), seven PNGs, and
+[`stats.COLUMNS`](../src/evolve/stats.py) wide table — 58 columns: the original
+40, then 18 appended in the upgrade (13 in the first additive block, 2 in the
+second, 3 bottleneck indicators in the third), never reordered), seven PNGs, and
 `summary.md`. `--all` additionally writes `index.md`. The assay also writes
 `pre_registration.md` and `assay.csv`.
 
@@ -134,6 +134,73 @@ says the scenario list is a declared set, not a sample of environments.
 plain configuration is used as written. A warm-up (`--warmup N`) is validated
 against the *shortest* horizon across the selected cells, so it can never
 consume the whole evaluation window of a short scenario.
+
+## Sensitivity sweeps
+
+`evolve.cli sensitivity` varies **one factor at a time** and writes a CSV plus
+`summary.md` (IMPROVE §3.4 / §9). Each declared sweep has a hypothesis written
+before the run, a rationale, and values bracketing the calibrated default. No
+default is written back.
+
+```bash
+# one config sweep
+PYTHONPATH=src python3 -m evolve.cli sensitivity --sweep bite \
+    --seeds 11 12 --ticks 120 --scale 0.25 --out out/sens
+
+# a founder-trait sweep (a genome locus, not a config field)
+PYTHONPATH=src python3 -m evolve.cli sensitivity --sweep vision_range \
+    --seeds 11 12 --ticks 120 --scale 0.25 --out out/sens
+
+# every declared sweep
+PYTHONPATH=src python3 -m evolve.cli sensitivity --sweep all --out out/sens_all
+```
+
+Six sweeps vary a **config coefficient** (`energy.bite`, `energy.eta_p`,
+`environment.soil_diffusion`, `genetics.sigma_trait`,
+`organisms.maturity_age`, `energy.decay`). Three vary a **founder genome
+locus**: `vision_range`, `metabolic_rate` and `mutation_rate`. A trait sweep
+takes a physical value (world units, × basal rate, mutations per locus per
+birth), maps it back to the gene value through `GENE_SPECS`, and sets that locus
+in every founder **before tick 1**; the phenotype cache is refreshed immediately.
+After tick 1 the locus mutates like any other gene, so the sweep measures the
+effect of the *starting condition*, not a policy the population cannot escape.
+
+`body_size` is deliberately excluded from trait sweeps: founder reserve is
+derived from body mass at construction, so overriding mass after construction
+would leave every animal's starting energy inconsistent with its own body. The
+declaration raises rather than silently saturating, and a value outside the
+gene's physical span is an error.
+
+### Measured smoke results (scale 0.25, 120 ticks, seeds 11/12, n = 2)
+
+These are *probes*, not design-scale findings; n = 2 is underpowered and no
+p-value here is evidence of anything.
+
+| Sweep | Value | Final population (mean ± SD) |
+|---|---|---|
+| `vision_range` | 40 / 100 / 160 world units | 16.0 ± 1.4 / 16.5 ± 2.1 / 15.5 ± 0.7 |
+| `metabolic_rate` | 0.6 / 1.0 / 1.6 × basal | 18.5 ± 0.7 / 17.5 ± 2.1 / 14.5 ± 2.1 |
+| `mutation_rate` | 0.001 / 0.010 / 0.050 per locus | 17.0 ± 1.4 / 17.5 ± 0.7 / 17.5 ± 0.7 |
+
+No direction is claimed from these numbers. The metabolic sweep is the only one
+that moves outside its own seed-to-seed spread at this scale, and even that is
+two seeds.
+
+## Bottleneck indicator
+
+Every `tick_stats` row carries `population_drop`, `diversity_drop` and
+`bottleneck` (IMPROVE §5). The indicator compares the current sample with the
+peaks of population and `mean_pairwise` **within the retained window**: when
+both have fallen by at least `BOTTLENECK_DROP` (0.5), `bottleneck` is 1.
+`population_drop` and `diversity_drop` are always reported so a one-sided
+decline is visible.
+
+This is a **contraction indicator**, not an effective population size: an
+`Ne` estimate needs a neutral-locus coalescent model that this simulation does
+not satisfy. It is also not a species count and not a fitness score. A window
+with fewer than two samples reports zeros — "not yet measurable", not "no
+bottleneck". The live analytics view draws the two components as a chart from
+the same retained window, so the panel and the CSV describe the same quantity.
 
 ## Scaling
 

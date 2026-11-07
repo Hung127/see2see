@@ -165,6 +165,56 @@ def behavioural_diversity(pop, idx: np.ndarray) -> float:
     return float(dists[np.triu_indices(sample.shape[0], 1)].mean())
 
 
+#: A bottleneck *indicator*, not an estimate of effective population size.
+#: Both the population and the genetic spread must have fallen by at least this
+#: fraction from their own peak in the retained window. The threshold is a
+#: declared convention: it flags "this population has just contracted and lost
+#: diversity", not a demographic Ne (which would need a neutral-locus model this
+#: simulation does not satisfy). Defined before :func:`bottleneck` because it is
+#: the function's default argument.
+BOTTLENECK_DROP = 0.5
+
+
+def bottleneck(rows, current_population: int, current_diversity: float,
+               threshold: float = BOTTLENECK_DROP) -> dict[str, float]:
+    """Contract-and-lose-diversity indicator over the retained window.
+
+    IMPROVE §5 asks for "evolutionary bottleneck detection". What can be
+    measured honestly here is a *contraction*: both the population and the
+    genetic spread have fallen by ``threshold`` from their own peak in the
+    window. This is deliberately **not** an effective population size — that
+    would need a neutral-locus coalescent model, which this simulation does not
+    satisfy — and it is not a species count.
+
+    ``rows`` are the already-recorded samples (oldest first). The current sample
+    is included so a collapse that just happened is not missed.
+    ``mean_pairwise`` is the genetic-spread series the recorder already
+    computes; reusing an existing metric keeps the indicator's definition stable
+    rather than inventing a second diversity scale.
+
+    Returns ``population_drop`` and ``diversity_drop`` (fractions in [0, 1]) and
+    ``bottleneck`` (1.0 when both reach ``threshold``, else 0.0). A window with
+    no earlier samples returns all zeros: "not yet measurable", not "no
+    bottleneck".
+    """
+    pops = [float(r["population"]) for r in rows]
+    divs = [float(r["mean_pairwise"]) for r in rows]
+    pops.append(float(current_population))
+    divs.append(float(current_diversity))
+    if len(pops) < 2:
+        return {"population_drop": 0.0, "diversity_drop": 0.0,
+                "bottleneck": 0.0}
+    peak_pop = max(pops)
+    peak_div = max(divs)
+    pop_drop = ((peak_pop - pops[-1]) / peak_pop) if peak_pop > 0.0 else 0.0
+    div_drop = ((peak_div - divs[-1]) / peak_div) if peak_div > 0.0 else 0.0
+    pop_drop = float(min(1.0, max(0.0, pop_drop)))
+    div_drop = float(min(1.0, max(0.0, div_drop)))
+    flagged = 1.0 if (pop_drop >= threshold and div_drop >= threshold) else 0.0
+    return {"population_drop": pop_drop, "diversity_drop": div_drop,
+            "bottleneck": flagged}
+
+
 def _survival_median(engine) -> float:
     """Median age at death from the engine's bounded histogram.
 
@@ -211,6 +261,10 @@ COLUMNS = (
     # -- second additive block (IMPROVE §3.3, appended after the first) -------
     "environmental_stress",               # mean drought stress where animals are
     "behavioural_diversity",              # spread of activity profiles, not genes
+    # -- third additive block (IMPROVE §5, bottleneck indicators) -------------
+    "population_drop",                    # fall from the window's peak population
+    "diversity_drop",                     # fall from the window's peak gene spread
+    "bottleneck",                         # 1 when both drops exceed the threshold
 )
 
 #: Columns added in the upgrade. Kept separate so persistence/tests can tell the
@@ -349,6 +403,7 @@ class StatsRecorder:
             "environmental_stress": self._environmental_stress(engine, idx),
             "behavioural_diversity": behavioural_diversity(pop, idx),
         }
+        row.update(bottleneck(self.rows, n, row["mean_pairwise"]))
         self.rows.append(row)
         return row
 

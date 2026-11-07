@@ -25,6 +25,7 @@ reported as a null; it is never converted into "no effect".
 from __future__ import annotations
 
 import csv
+import math
 import os
 from dataclasses import replace
 from typing import Any, Iterable, Mapping
@@ -36,30 +37,44 @@ from .engine import Engine
 from .experiments import (
     DEFAULT_SCALE, bootstrap_ci, scaled_config, wilcoxon_signed_rank,
 )
+from .genome import GENE_SPECS, TRAIT_NAMES, phenotype
 from .rng import Rng
-from .stats import StatsRecorder
+from .stats import StatsRecorder, bottleneck
 
 CONFIGS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "configs")
 DEFAULT_CONFIG = "default.yaml"
 
-#: Measured outcomes compared across parameter values.
+#: Measured outcomes compared across parameter values. Append-only, so a CSV
+#: written by an earlier version still parses by name.
 ENDPOINTS = (
     "final_population", "extinct", "births", "deaths",
     "mean_energy", "mean_organism_biomass", "survival_median",
     "mean_pairwise", "trait_variance", "population_cv",
+    # IMPROVE §5: the contraction indicator, so a sweep can show whether a
+    # setting drives the population into a bottleneck.
+    "population_drop", "diversity_drop", "bottleneck",
 )
 
 
 class Sweep:
-    """One declared one-factor sweep."""
+    """One declared one-factor sweep.
+
+    The independent variable is either a config field (``parameter`` is a
+    dotted ``section.field`` name) or a **genetic locus** (``trait`` names one of
+    :data:`evolve.genome.TRAIT_NAMES`, and ``parameter`` is ``trait.<name>`` for
+    reporting). A trait sweep sets the locus in every founder genome before the
+    first tick, which is why the physical value is converted back to a gene
+    value: the sweep varies what the animal is born with, not a global
+    coefficient.
+    """
 
     __slots__ = ("id", "parameter", "values", "baseline", "hypothesis",
-                 "rationale", "expectation")
+                 "rationale", "expectation", "trait")
 
     def __init__(self, id: str, parameter: str, values: Iterable[float],
                  baseline: float, hypothesis: str, rationale: str,
-                 expectation: str = "") -> None:
+                 expectation: str = "", trait: str | None = None) -> None:
         self.id = id
         self.parameter = parameter
         self.values = tuple(values)
@@ -67,10 +82,59 @@ class Sweep:
         self.hypothesis = hypothesis
         self.rationale = rationale
         self.expectation = expectation
+        self.trait = trait
         if self.baseline not in self.values:
             raise ValueError(f"sweep {id!r}: baseline {baseline!r} not in values")
         if len(self.values) < 2:
             raise ValueError(f"sweep {id!r}: needs at least two values")
+        if trait is not None and trait not in TRAIT_NAMES:
+            raise ValueError(f"sweep {id!r}: unknown trait {trait!r}; "
+                             f"known: {TRAIT_NAMES}")
+        if trait is not None and parameter != f"trait.{trait}":
+            raise ValueError(f"sweep {id!r}: trait sweeps must name "
+                             f"'trait.{trait}', got {parameter!r}")
+
+    @property
+    def is_trait(self) -> bool:
+        return self.trait is not None
+
+
+#: Traits that may be varied at founding. ``body_size`` is excluded on purpose:
+#: the founder reserve is derived from body mass at construction, so changing
+#: mass afterwards would leave every animal's starting energy inconsistent with
+#: its own body. The rest do not feed the founder reserve, so overriding them
+#: before tick 1 is a clean initial-condition change.
+TRAIT_SWEEP_ALLOWED = ("vision_range", "vision_angle", "metabolic_rate",
+                       "attack", "defense", "repro_threshold",
+                       "repro_investment", "diet_preference", "lifespan",
+                       "mutation_rate", "speed_max")
+
+
+def _trait_locus(trait: str, physical: float) -> float:
+    """Invert the monotone gene→phenotype map for one trait.
+
+    ``GENE_SPECS`` maps a locus ``g`` in [0, 1] to a physical value with a
+    linear or log-linear curve. A sweep declares physical values (units a reader
+    can reason about: units, bu/tick, mutations per locus per birth), so the
+    value is mapped back to the locus that produces it. The result is clipped to
+    [0, 1], and a value outside the gene's physical span raises rather than
+    silently saturating: a sweep that cannot be expressed must fail loudly.
+    """
+    spec = next((s for s in GENE_SPECS if s.name == trait), None)
+    if spec is None:
+        raise ValueError(f"unknown trait {trait!r}")
+    if spec.kind == "exp":
+        if physical <= 0.0:
+            raise ValueError(f"{trait}: a log-mapped trait needs a positive "
+                             f"value, got {physical!r}")
+        g = ((math.log(physical) - math.log(spec.lo))
+             / (math.log(spec.hi) - math.log(spec.lo)))
+    else:
+        g = (float(physical) - spec.lo) / (spec.hi - spec.lo)
+    if g < 0.0 or g > 1.0:
+        raise ValueError(f"{trait}: {physical!r} lies outside the gene's "
+                         f"physical span [{spec.lo}, {spec.hi}]")
+    return float(g)
 
 
 #: The declared sweeps. Values bracket the calibrated default; they are chosen
@@ -113,6 +177,44 @@ SWEEPS: dict[str, Sweep] = {
         hypothesis=("Faster decomposition returns nutrients to soil sooner, "
                     "which should raise plant biomass."),
         rationale=("Tests the detritus -> soil -> plant pathway end to end.")),
+    # -- trait-level sweeps (IMPROVE §3.4): the independent variable is a
+    # founder genome locus, not a config coefficient. Values are physical units
+    # from GENE_SPECS, converted back to a locus before tick 1.
+    "vision_range": Sweep(
+        "vision_range", "trait.vision_range", (40.0, 100.0, 160.0), 100.0,
+        hypothesis=("Wider vision should let animals find plants and threats "
+                    "sooner, but it is not free: the vision term of the "
+                    "metabolic cost grows with range squared, so the net "
+                    "population effect may be flat or negative."),
+        rationale=("Directly tests the sense-before-act premise: if vision does "
+                   "nothing, the entire sensor channel is decorative."),
+        expectation=("A rise in intake and a rise in metabolic cost together; "
+                     "population alone is not the test, because the two "
+                     "effects oppose."),
+        trait="vision_range"),
+    "metabolic_rate": Sweep(
+        "metabolic_rate", "trait.metabolic_rate", (0.60, 1.00, 1.60), 1.00,
+        hypothesis=("A faster metabolism raises the basal bill and digestion "
+                    "scope at once; at the low end animals should starve more "
+                    "slowly with a low ceiling, so the population response is "
+                    "expected to be hump-shaped rather than monotone."),
+        rationale=("The metabolic trade-off is the model's central energetic "
+                   "constraint; sweeping the locus tests whether that "
+                   "trade-off is actually load-bearing."),
+        expectation=("Both extremes worse than the middle if the trade-off is "
+                     "real; a monotone response would mean one side dominates."),
+        trait="metabolic_rate"),
+    "mutation_rate": Sweep(
+        "mutation_rate", "trait.mutation_rate", (0.001, 0.010, 0.050), 0.010,
+        hypothesis=("A higher mutation rate raises trait and network variance "
+                    "but risks breaking adapted combinations, so diversity "
+                    "should rise while population may fall."),
+        rationale=("Complements `sigma_trait` (a config-level mutation scale) by "
+                   "varying the per-organism locus that evolution itself can "
+                   "adjust, which is the quantity under selection."),
+        expectation=("Higher trait_variance and mean_pairwise at the top value; "
+                     "no claim about population direction at this scale."),
+        trait="mutation_rate"),
 }
 
 
@@ -141,10 +243,33 @@ def _set_parameter(config: Config, dotted: str, value: Any) -> Config:
     return replace(config, **{section: replace(current, **{field_name: coerced})})
 
 
-def _run_one(config: Config, seed: int) -> dict[str, Any]:
-    """Run one engine to the horizon and return measured endpoints."""
+def _run_one(config: Config, seed: int, trait: str | None = None,
+             trait_value: float | None = None) -> dict[str, Any]:
+    """Run one engine to the horizon and return measured endpoints.
+
+    When ``trait`` is given, every founder's locus for that trait is set to the
+    gene value that maps to ``trait_value`` **before the first tick**, and the
+    phenotype cache is refreshed. This is an initial-condition change, not a
+    per-tick intervention: no animal is modified after tick 0, so the engine's
+    RNG draw order is untouched and two runs remain paired by seed.
+
+    ``body_size`` is not accepted here (see :data:`TRAIT_SWEEP_ALLOWED`): founder
+    reserves are derived from body mass at construction, so overriding mass
+    afterwards would make starting energy inconsistent with body.
+    """
     cfg = replace(config, seed=int(seed))
     engine = Engine(cfg)
+    if trait is not None:
+        if trait_value is None:
+            raise ValueError("trait_value is required when trait is set")
+        if trait not in TRAIT_SWEEP_ALLOWED:
+            raise ValueError(
+                f"trait {trait!r} cannot be swept at founding; allowed: "
+                f"{TRAIT_SWEEP_ALLOWED}")
+        locus = _trait_locus(trait, float(trait_value))
+        index = TRAIT_NAMES.index(trait)
+        engine.population.genome[:, index] = locus
+        engine._refresh_phen()
     recorder = StatsRecorder()
     interval = max(1, int(cfg.stats.interval))
     while engine.tick < int(cfg.ticks):
@@ -166,6 +291,10 @@ def _run_one(config: Config, seed: int) -> dict[str, Any]:
         "mean_pairwise": float(row.get("mean_pairwise", 0.0)),
         "trait_variance": float(row.get("trait_variance", 0.0)),
         "population_cv": float(row.get("population_cv", 0.0)),
+        # Bottleneck indicator sampled at the horizon (IMPROVE §5).
+        "population_drop": float(row.get("population_drop", 0.0)),
+        "diversity_drop": float(row.get("diversity_drop", 0.0)),
+        "bottleneck": float(row.get("bottleneck", 0.0)),
         "checksum": engine.checksum(),
     }
 
@@ -238,9 +367,14 @@ def run_sweep(out_dir: str, *, sweep: str = "all",
     for key in selected:
         decl = SWEEPS[key]
         for value in decl.values:
-            cfg = _set_parameter(base, decl.parameter, value)
+            # A trait sweep varies a founder genome locus (converted from the
+            # physical value); a parameter sweep copies the config. Neither
+            # mutates ``base`` and both keep the engine's RNG stream untouched.
+            cfg = (base if decl.is_trait
+                   else _set_parameter(base, decl.parameter, value))
             for seed in seeds:
-                result = _run_one(cfg, seed)
+                result = _run_one(cfg, seed, trait=decl.trait,
+                                  trait_value=(value if decl.is_trait else None))
                 result.update({"sweep": key, "parameter": decl.parameter,
                                "parameter_value": value})
                 rows.append(result)
@@ -268,6 +402,8 @@ def run_sweep(out_dir: str, *, sweep: str = "all",
             "hypothesis": SWEEPS[k].hypothesis,
             "rationale": SWEEPS[k].rationale,
             "expectation": SWEEPS[k].expectation,
+            "trait": SWEEPS[k].trait,
+            "is_trait": SWEEPS[k].is_trait,
             "table": summaries[k],
         } for k in selected},
         "rows": rows,
@@ -291,8 +427,13 @@ def _markdown(report: Mapping[str, Any]) -> str:
         "",
     ]
     for key, block in report["sweeps"].items():
+        kind = ("founder trait locus" if block.get("is_trait")
+                else "config coefficient")
         lines += [
             f"## `{key}` — {block['parameter']}",
+            "",
+            f"**Independent variable.** A {kind}; values are the physical "
+            f"quantities a reader can reason about.",
             "",
             f"**Hypothesis (pre-registered).** {block['hypothesis']}",
             "",
@@ -302,8 +443,9 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"`{block['baseline']}`).",
             "",
             "| Value | n | Final pop (mean ± SD) | Births | Deaths | "
-            "Mean energy | Trait variance | Δpop vs baseline [95 % CI] p |",
-            "|---|---|---|---|---|---|---|---|",
+            "Mean energy | Trait variance | Bottleneck rate | "
+            "Δpop vs baseline [95 % CI] p |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
         for row in block["table"]:
             lines.append(
@@ -313,6 +455,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
                 f"{row['births_mean']:.1f} | {row['deaths_mean']:.1f} | "
                 f"{row['mean_energy_mean']:.3f} | "
                 f"{row['trait_variance_mean']:.5f} | "
+                f"{row['bottleneck_mean']:.2f} | "
                 f"{row['final_population_diff']:+.1f} "
                 f"[{row['final_population_ci_low']:+.1f}, "
                 f"{row['final_population_ci_high']:+.1f}] "
@@ -333,6 +476,17 @@ def _markdown(report: Mapping[str, Any]) -> str:
         "equivalence.",
         "- Extinction, when it happens, is reported in the CSV and is not "
         "smoothed away by averaging.",
+        "- \"Bottleneck rate\" is the fraction of runs whose final sample "
+        "flagged a contraction: both population and genetic spread had fallen "
+        "by at least half from their own peak in the retained window. It is an "
+        "indicator of a demographic/genetic squeeze, **not** an effective "
+        "population size (that would need a neutral-locus model this "
+        "simulation does not satisfy) and not a species count.",
+        "- A trait sweep varies the *founder* genome locus before tick 1, so it "
+        "measures the effect of starting condition, not of a policy the "
+        "population can evolve away from; mutation then acts on that locus as "
+        "usual. `body_size` is excluded because founder reserves are derived "
+        "from body mass at construction.",
         "- No calibrated default is changed by this analysis; the sweep only "
         "reports what the model does.",
         "",

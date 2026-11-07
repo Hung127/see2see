@@ -51,8 +51,8 @@ default or presentation-only:
 |---|---|---|---|
 | Controller protocol | `controllers.py` | `Observation → Controller → Action`; closed registry (`neural`, `random`, `passive`, `rule`, `forage`) | `Engine.controller = None` → the exact pre-upgrade MLP path |
 | Controller evaluation | `controller_eval.py` | paired-seed comparison with Wilcoxon + bootstrap CI | opt-in CLI command |
-| Sensitivity sweeps | `sensitivity.py` | six declared one-factor sweeps | opt-in CLI command |
-| Derived statistics | `stats.py` | 13 appended columns; death-cause counters; age-at-death histogram; `LineageRecorder` | stats always on, lineage recorder opt-in |
+| Sensitivity sweeps | `sensitivity.py` | nine declared one-factor sweeps (six config coefficients + three founder trait loci) | opt-in CLI command |
+| Derived statistics | `stats.py` | 18 appended columns; death-cause counters; age-at-death histogram; `LineageRecorder` | stats always on, lineage recorder opt-in |
 | Analytics history | `viz/analytics.py`, `viz/charts.py` | bounded, tick-sampled ring buffer + dependency-free chart primitives | presentation only |
 | Ancestry view | `viz/ancestry.py` | tree built from recorded links every frame | presentation only |
 
@@ -173,10 +173,10 @@ Bounded by construction, not by hope:
 
 ## 6. New scientific metrics — **DONE**
 
-Fifteen columns were **appended** to `stats.COLUMNS` (never reordered, so old
-CSVs still parse by name), in two additive blocks — the second exists only
-because the first was already committed, and the schema rule is "append, never
-reorder":
+Eighteen columns were **appended** to `stats.COLUMNS` (never reordered, so old
+CSVs still parse by name), in three additive blocks — each new block exists only
+because the previous one was already committed, and the schema rule is "append,
+never reorder":
 
 | Column | What it is | Observed or derived |
 |---|---|---|
@@ -190,6 +190,8 @@ reorder":
 | `population_cv` | coefficient of variation over the retained window | derived |
 | `environmental_stress` | mean drought stress **sampled at the living organisms' cells**, not world-wide | observed |
 | `behavioural_diversity` | mean pairwise distance between per-tick lifetime activity profiles (distance moved, bites, hunts, reproduction attempts, rest), on a ≤200-organism stride | derived from measured counters |
+| `population_drop`, `diversity_drop` | fall from each series' own peak (population, `mean_pairwise`) within the retained window | derived |
+| `bottleneck` | `1` when **both** drops reach `BOTTLENECK_DROP` (0.5), else `0` | derived indicator, **not** an effective population size |
 
 `behavioural_diversity` is deliberately **not** genetic diversity: it never reads
 a genome. Two clones can behave differently and two genomes can behave
@@ -201,6 +203,17 @@ normalising by the sample's own spread would give every run the same score.
 `environmental_stress` samples `fields.water_stress` at each animal's position,
 the same lookup the metabolism stage uses to charge the drought cost. Reporting
 the field mean instead would understate a population sheltering in dry cells.
+
+`bottleneck` is the honest form of the §5 "bottleneck detection" request. What
+can be measured without a neutral-locus model is a **contraction**: the current
+population and the current genetic spread are compared with their own peaks in
+the retained window. When both have fallen by at least `BOTTLENECK_DROP` (0.5),
+the sample is flagged. `population_drop` and `diversity_drop` are always
+reported so a reader can see a one-sided decline rather than only the flag. This
+is deliberately **not** an effective population size (that needs a coalescent
+model the simulation does not satisfy), not a species count, and not a fitness
+score. A window with fewer than two samples reports all zeros — "not yet
+measurable", not "no bottleneck".
 
 Supporting engine state, all statistics-only and excluded from `checksum()`:
 
@@ -293,25 +306,45 @@ by assay G.
 
 ### Sensitivity sweeps (`evolve.cli sensitivity`)
 
-Six declared sweeps, each with a **pre-registered hypothesis**, a rationale, and
-values bracketing the calibrated default:
+Nine declared sweeps, each with a **pre-registered hypothesis**, a rationale, and
+values bracketing the calibrated default. Six vary a **config coefficient**;
+three vary a **founder trait locus** (the genome value every founder is born
+with, converted from a physical quantity through `GENE_SPECS` before tick 1).
 
-| Sweep | Parameter | Values | Baseline |
-|---|---|---|---|
-| `bite` | `energy.bite` | 0.25 / 0.50 / 0.75 / 1.00 | 0.50 |
-| `eta_p` | `energy.eta_p` | 0.50 / 0.75 / 1.00 | 0.75 |
-| `soil_diffusion` | `environment.soil_diffusion` | 0.02 / 0.10 / 0.30 | 0.10 |
-| `sigma_trait` | `genetics.sigma_trait` | 0.02 / 0.08 / 0.20 | 0.08 |
-| `maturity_age` | `organisms.maturity_age` | 25 / 50 / 100 | 50 |
-| `decay` | `energy.decay` | 0.005 / 0.015 / 0.045 | 0.015 |
+| Sweep | Parameter | Kind | Values | Baseline |
+|---|---|---|---|---|
+| `bite` | `energy.bite` | config | 0.25 / 0.50 / 0.75 / 1.00 | 0.50 |
+| `eta_p` | `energy.eta_p` | config | 0.50 / 0.75 / 1.00 | 0.75 |
+| `soil_diffusion` | `environment.soil_diffusion` | config | 0.02 / 0.10 / 0.30 | 0.10 |
+| `sigma_trait` | `genetics.sigma_trait` | config | 0.02 / 0.08 / 0.20 | 0.08 |
+| `maturity_age` | `organisms.maturity_age` | config | 25 / 50 / 100 | 50 |
+| `decay` | `energy.decay` | config | 0.005 / 0.015 / 0.045 | 0.015 |
+| `vision_range` | `trait.vision_range` | founder locus (world units) | 40 / 100 / 160 | 100 |
+| `metabolic_rate` | `trait.metabolic_rate` | founder locus (× basal) | 0.60 / 1.00 / 1.60 | 1.00 |
+| `mutation_rate` | `trait.mutation_rate` | founder locus (per locus per birth) | 0.001 / 0.010 / 0.050 | 0.010 |
 
 Every run is paired by seed. The report gives per-value mean/SD, the paired
 difference against the baseline value with a bootstrap CI and a Wilcoxon
-p-value, and states that extinction is reported, not averaged away.
+p-value, a bottleneck rate, and states that extinction is reported, not averaged
+away. The trait sweeps vary **what an animal is born with**, not a global
+coefficient: `body_size` is excluded because founder reserve is derived from body
+mass at construction, so overriding mass afterwards would make starting energy
+inconsistent with body. After tick 1 the locus mutates like any other gene, so a
+trait sweep measures the effect of the starting condition, not a policy.
 
 **Both are implemented and tested; only short smoke runs were executed here**
 (see §8). Design-scale runs are left to the experiment programme, which already
 documents its own scaled-vs-full distinction.
+
+The three trait sweeps map directly onto the §3.4 experiment list: `vision_range`
+is the vision-range sensitivity experiment, `metabolic_rate` is the metabolic
+trade-off experiment and `mutation_rate` is the mutation-rate sensitivity
+experiment. A short probe (scale 0.25, 120 ticks, seeds 11/12) gave final
+populations of 16.0 ± 1.4 / 16.5 ± 2.1 / 15.5 ± 0.7 for vision 40/100/160,
+18.5 ± 0.7 / 17.5 ± 2.1 / 14.5 ± 2.1 for metabolic rate 0.6/1.0/1.6 and
+17.0 ± 1.4 / 17.5 ± 0.7 / 17.5 ± 0.7 for mutation rate 0.001/0.010/0.050. With
+two seeds no direction is claimed; the numbers are recorded as a feasibility
+check of the harness, not as findings.
 
 ---
 
@@ -434,12 +467,13 @@ network the animal actually ran. The engine's per-organism genome, physical
 traits, neural outputs, decoded actions and lifetime counters are all in the
 same panel; only the 380-number dump is withheld.
 
-**Analytics (`a`).** 21 chart blocks, each declaring **one unit** — population;
+**Analytics (`a`).** 22 chart blocks, each declaring **one unit** — population;
 births and deaths; biomass pools; reserve and body; speed; vision; genes;
 genetic variance; pairwise distance; temperature; moisture; generation depth;
 median age at death; deaths by cause; an age-at-death histogram; **live body-mass
 and reserve distributions** (computed at draw time, not stored per sample); CV;
-**drought stress where the animals are**; **behavioural diversity**; behaviour
+**drought stress where the animals are**; **behavioural diversity**;
+**contraction from the window's peak** (IMPROVE §5); behaviour
 totals. Mixed-magnitude series were **split** rather than overlaid, so
 no axis has a meaningless unit. Charts print unit and range, `nan` breaks the
 line instead of becoming zero, and a series with no samples says so instead of
@@ -481,11 +515,12 @@ approximation that changes what is on screen.
 
 ## 10. Test results — **DONE**
 
-`python3 -m pytest tests/ -o addopts="" -q` → **374 passed in 200.38 s**.
+`python3 -m pytest tests/ -o addopts="" -q` → **389 passed in 144.35 s**.
 (Earlier stages of the upgrade: 343 passed in 266.55 s, then 346 in 259.34 s,
-then 357 in 176.12 s, then 365 in 145.99 s; the runtime moves with the machine's
-load, not with correctness.) Suite grew from 196 to 374 tests. No existing
-assertion was weakened or deleted; several were strengthened. The notable ones:
+then 357 in 176.12 s, then 365 in 145.99 s, then 374 in 200.38 s, then 387 in
+147.49 s; the runtime moves with the machine's load, not with correctness.)
+Suite grew from 196 to 389 tests. No existing assertion was weakened or
+deleted; several were strengthened. The notable ones:
 
 * `tests/test_optimization_equivalence.py` pins the three pre-upgrade checksums.
 * `tests/test_controllers.py` (38) covers the output contract, reproducibility,
@@ -496,26 +531,40 @@ assertion was weakened or deleted; several were strengthened. The notable ones:
   differences the run totals from the resume point, and multi-scenario mode
   runs every controller in every scenario × seed with a nested analysis and a
   bounded robustness block (and rejects unknown scenario names).
-* `tests/test_sensitivity.py` (11) covers config copy-not-mutate, type
-  preservation, real config fields, and extinction being reported.
-* `tests/test_metrics.py` (21) covers the appended columns and that the original
+* `tests/test_sensitivity.py` (17) covers config copy-not-mutate, type
+  preservation, real config fields, and extinction being reported. The six new
+  tests pin the trait-level sweeps: `_trait_locus` inverts the gene map for
+  every declared trait (linear and log arms) and reproduces the physical value
+  through `phenotype`, out-of-range and non-positive values raise rather than
+  saturate, `body_size` is refused at founding, a trait sweep leaves the base
+  config untouched and is reproducible with different checksums per value, and
+  the summary names the independent variable's kind.
+* `tests/test_metrics.py` (28) covers the appended columns and that the original
   block is a prefix of `COLUMNS`, plus the two second-block metrics: identical
   profiles score zero, differing activity moves the score, the metric ignores
   genomes, the profile is a per-tick rate (10-tick-old and 100-tick-old animals
   with the same rate agree), and stress is sampled at the animals' cells rather
-  than world-wide. Four more pin the cumulative run totals: they are excluded
+  than world-wide. Four pin the cumulative run totals: they are excluded
   from `checksum()`, they reconcile with the tick (successes ⊆ attempts,
   assimilated energy ≤ intake, summed ages ≥ deaths), they survive their
   organism's death, and `death_age_sum` is the exact mean-lifespan denominator.
+  Seven pin the §5 indicator: no earlier sample reports zeros, a joint collapse
+  flags, a mild decline does not, a one-sided drop does not, a zero peak
+  diversity cannot yield a fractional drop, and the recorder's three new columns
+  leave the checksum unchanged and are sampled rather than state.
 * `tests/test_snapshots.py` (3) now also asserts the run totals survive a
   snapshot round-trip bit-for-bit and stay out of the checksum.
 * `tests/test_cli.py` (8) includes the new multi-scenario smoke run and the
   unknown-scenario error.
 * `tests/test_lineage.py` (15) covers the bounded recorder, real birth traits,
   no fabrication, and that attaching it does not change the checksum.
-* `tests/test_viz_ancestry.py` (15), `test_viz_charts.py` (33),
+* `tests/test_viz_ancestry.py` (15), `test_viz_charts.py` (35),
   `test_viz_panels.py` (46), `test_viz_render_lod.py` (7) and
-  `test_viz_smoke.py` (6) cover the viewer headlessly. The four new panel tests
+  `test_viz_smoke.py` (6) cover the viewer headlessly. Two chart tests also pin
+  the §5 contraction chart: it is declared with one unit, its three series are
+  bounded fractions in the history, and the history's value equals the
+  `bottleneck()` result recomputed from its own earlier samples. The four new
+  panel tests
   pin the on-demand network summary: off by default, `W` toggles it, the rows
   describe the real weights (and a zero network reports zero rather than
   hiding), a missing payload does not crash the inspector, and opening the
@@ -586,10 +635,28 @@ Reported, not hidden:
   correctly, not filled in.
 * **Lineage is a descent chain, never a species.** No metric here is called
   species diversity.
+* **`bottleneck` is a contraction indicator, not `Ne`.** It flags a joint fall
+  from the window's own peak in population and genetic spread. It is not an
+  effective population size, it says nothing about *which* lineages survived,
+  and a long slow decline that never had a peak inside the retained window is
+  not flagged. The two component drops are always reported so a one-sided
+  decline is visible.
 
 ---
 
 ## 12. Deferred improvements — **DEFERRED**
+
+### IMPROVE §5 short-term items — status
+
+| §5 item | Status |
+|---|---|
+| Better genetic diversity metrics | **DONE** — `trait_variance`, `nn_variance`, `mean_pairwise`, `diet_entropy`, `unique_genomes`, kept as separate proxies |
+| Lineage analysis | **DONE** — bounded `LineageRecorder` + ancestry view; descent chain, never species |
+| Mutation-rate analysis | **DONE** — `mutation_rate` founder-locus sweep |
+| Reproductive success tracking | **DONE** — per-organism `repro_attempts`/`repro_success` and population `run_totals["repro_*"]` |
+| Evolutionary bottleneck detection | **DONE as an indicator** — `population_drop`/`diversity_drop`/`bottleneck`, explicitly not `Ne` |
+
+Medium- and long-term §5 items remain deferred below.
 
 Each is deferred with a reason, not forgotten:
 
@@ -598,7 +665,7 @@ Each is deferred with a reason, not forgotten:
 | **NEAT / topology evolution, innovation numbering, structural crossover, speciation (M8)** | Requires a *valid comparison experiment* against the fixed 16→12→8→8 MLP before it may replace it. That experiment does not exist yet, and the brief forbids replacing the MLP first. |
 | **Recurrent controllers** | Same reason: no comparison experiment, and recurrence changes the determinism contract (hidden state must be snapshotted). |
 | **Controller-complexity analysis** | Needs a complexity measure agreed before the comparison is meaningful; premature without the NEAT experiment. |
-| **Behavioural-specialisation analysis** | Would need a behavioural-diversity metric distinct from genetic diversity; conflating them is explicitly forbidden. |
+| **Behavioural-specialisation analysis** | The metric it needs now exists (`behavioural_diversity`, deliberately distinct from genetic diversity), but *classifying* animals into specialisations would need a declared clustering rule and a test that the clusters are stable; not done, and calling them species is forbidden. |
 | **Design-scale runs of every experiment** | ~7.5 h on this machine (state in `BENCHMARKS.md`); scaled runs are what the suite executes. |
 | **60 FPS at the largest scene** | The measured terrain fill (~15.5 ms) is the floor; the only faster option measured was not pixel-equivalent, so it was rejected rather than quietly accepted. |
 
@@ -611,7 +678,7 @@ Each is deferred with a reason, not forgotten:
 | [`AUDIT.md`](AUDIT.md) | Phase 1 audit (unchanged since writing it; it is a before-picture) |
 | [`BENCHMARKS.md`](BENCHMARKS.md) | Optimization pass, before/after throughput, profile, memory, viewer/analytics cost |
 | [`ODD.md`](ODD.md) | Sensitivity and controller paragraphs in §2.6/§2.7 and §5 |
-| [`EXPERIMENTS.md`](EXPERIMENTS.md) | Statistics table is now 55 columns (40 + 13 + 2 appended), never reordered |
+| [`EXPERIMENTS.md`](EXPERIMENTS.md) | Statistics table is now 58 columns (40 + 13 + 2 + 3 appended), never reordered; trait sweeps and the bottleneck indicator documented |
 | [`README.md`](README.md) | Ancestry section and key, updated status, link to this report |
 | **`UPGRADE.md`** | This report |
 
@@ -633,11 +700,11 @@ what was added around them.
 | 3. Engine optimization report | **DONE** (5 changes, 1 rejected with measurement) |
 | 4. Before/after benchmarks | **DONE** (1.8×, targets still missed) |
 | 5. Peak/steady-state memory | **DONE** (< 650 MB, no growth with run length) |
-| 6. New scientific metrics | **DONE** (15 columns in two additive blocks, observed vs derived labelled) |
+| 6. New scientific metrics | **DONE** (18 columns in three additive blocks, observed vs derived labelled) |
 | 7. New experiment descriptions | **DONE** (harnesses) / **PARTIAL** (design-scale runs deferred) |
 | 8. Controller comparison results | **DONE** (measured; **underpowered null**) |
 | 9. Visualization changes | **DONE** (overlays, inspector, analytics, ancestry) |
-| 10. Test results | **DONE** (374 passed; 2 real bugs found by tests) |
+| 10. Test results | **DONE** (389 passed; 2 real bugs found by tests) |
 | 11. Known limitations | **DONE** (listed, not hidden) |
 | 12. Deferred improvements | **DEFERRED** (each with a reason) |
 | 13. Updated documentation | **DONE** |

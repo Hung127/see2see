@@ -57,6 +57,8 @@ FIELDS = (
     "bites", "hunts", "repro_successes",
     # IMPROVE §3.3: environmental stress and behavioural diversity.
     "environmental_stress", "behavioural_diversity",
+    # IMPROVE §5: contraction indicator over the retained window.
+    "population_drop", "diversity_drop", "bottleneck",
 )
 
 
@@ -163,6 +165,11 @@ class AnalyticsHistory:
             "survival_median": stats_mod._survival_median(engine),
             "environmental_stress": self._environmental_stress(engine, idx),
             "behavioural_diversity": stats_mod.behavioural_diversity(pop, idx),
+            # IMPROVE §5: the same contraction indicator as the stats recorder,
+            # computed over the retained sample window so the live view and the
+            # CSV describe the same quantity.
+            **stats_mod.bottleneck(self._rows, n,
+                                   float(means["mean_pairwise"])),
             "bites": total("bites"),
             "hunts": total("hunts"),
             "repro_successes": total("repro_success"),
@@ -261,6 +268,12 @@ def _blocks(data: dict[str, np.ndarray], engine
          "unit": "stress 0–1"},
         {"kind": "line", "key": "behaviour_div", "title": "behavioural diversity",
          "unit": "mean profile distance"},
+        # IMPROVE §5: the contraction indicator drawn from the same retained
+        # window the CSV uses. All three series are fractions in [0, 1], so one
+        # unit label is meaningful.
+        {"kind": "line", "key": "bottleneck",
+         "title": "contraction from window peak",
+         "unit": "fraction of peak 0–1"},
         {"kind": "line", "key": "behaviour", "title": "behaviour totals (living)",
          "unit": "events"},
     ]
@@ -364,6 +377,12 @@ def _draw_block(screen, rect, fonts, cache, block: dict,
         series = [("mean profile distance", ACCENT, d["behavioural_diversity"])]
         caption = ("spread of per-tick activity profiles; not genetic "
                    "diversity")
+    elif key == "bottleneck":
+        series = [("population drop", WARN, d["population_drop"]),
+                  ("diversity drop", BAD, d["diversity_drop"])]
+        caption = ("fall from each series' own peak in the retained window; "
+                   "half or more of both is flagged as a bottleneck, which is "
+                   "an indicator, not an effective population size")
     elif key == "behaviour":
         series = [("bites", GOOD, d["bites"]),
                   ("attacks", BAD, d["hunts"]),

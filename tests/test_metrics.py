@@ -43,6 +43,8 @@ def test_new_columns_are_appended_and_unique():
         "deaths_predation", "survival_median", "population_cv",
         # second additive block, appended after the first (IMPROVE §3.3)
         "environmental_stress", "behavioural_diversity",
+        # third additive block, appended after the second (IMPROVE §5)
+        "population_drop", "diversity_drop", "bottleneck",
     }
     assert len(set(COLUMNS)) == len(COLUMNS)
     # The pre-upgrade prefix is untouched and still a contiguous block.
@@ -335,3 +337,87 @@ def test_run_totals_carry_a_mean_lifespan_denominator():
     if eng.deaths_total:
         mean_age = eng.run_totals["death_age_sum"] / eng.deaths_total
         assert 0.0 <= mean_age <= float(eng.tick) + 1.0
+
+
+# -- IMPROVE §5: contraction / bottleneck indicator ---------------------------
+def test_bottleneck_needs_an_earlier_sample_before_it_says_anything():
+    """No history means "not measurable", which must not read as "no bottleneck"."""
+    from evolve.stats import bottleneck
+
+    out = bottleneck([], 100, 1.5)
+    assert out == {"population_drop": 0.0, "diversity_drop": 0.0,
+                   "bottleneck": 0.0}
+
+
+def test_bottleneck_flags_when_both_population_and_diversity_collapse():
+    from evolve.stats import BOTTLENECK_DROP, bottleneck
+
+    rows = [
+        {"population": 100, "mean_pairwise": 2.0},
+        {"population": 90, "mean_pairwise": 1.8},
+    ]
+    out = bottleneck(rows, 20, 0.2)
+    assert out["population_drop"] == pytest.approx(0.80)
+    assert out["diversity_drop"] == pytest.approx(0.90)
+    assert out["bottleneck"] == 1.0
+    assert BOTTLENECK_DROP == 0.5
+
+
+def test_bottleneck_does_not_flag_a_mild_decline():
+    from evolve.stats import bottleneck
+
+    rows = [{"population": 100, "mean_pairwise": 2.0}]
+    out = bottleneck(rows, 70, 1.4)          # 30% down on both: not a squeeze
+    assert out["bottleneck"] == 0.0
+    assert out["population_drop"] == pytest.approx(0.30)
+
+
+def test_bottleneck_requires_both_series_to_fall():
+    """A population crash with stable diversity is not (yet) a genetic squeeze."""
+    from evolve.stats import bottleneck
+
+    rows = [{"population": 100, "mean_pairwise": 2.0}]
+    out = bottleneck(rows, 10, 2.0)
+    assert out["population_drop"] == pytest.approx(0.90)
+    assert out["diversity_drop"] == pytest.approx(0.0)
+    assert out["bottleneck"] == 0.0
+
+
+def test_bottleneck_handles_a_zero_peak_diversity():
+    """A window that never had diversity cannot report a fractional drop."""
+    from evolve.stats import bottleneck
+
+    rows = [{"population": 10, "mean_pairwise": 0.0}]
+    out = bottleneck(rows, 2, 0.0)
+    assert out["diversity_drop"] == 0.0
+    assert out["bottleneck"] == 0.0
+
+
+def test_recorder_reports_bottleneck_columns_without_touching_the_checksum():
+    from evolve.stats import BOTTLENECK_DROP, bottleneck  # noqa: F401
+
+    eng = Engine(make_config(seed=15, n=30, ticks=120))
+    recorder = StatsRecorder()
+    before = eng.checksum()
+    row = recorder.record(eng)
+    assert {"population_drop", "diversity_drop", "bottleneck"} <= set(row)
+    assert row["population_drop"] == 0.0      # first sample: no history yet
+    assert row["bottleneck"] in (0.0, 1.0)
+    assert eng.checksum() == before
+
+
+def test_bottleneck_is_sampled_not_state():
+    """The indicator is an observation; recording it must not alter the run."""
+    eng = Engine(make_config(seed=16, n=30, ticks=120))
+    a = StatsRecorder()
+    b = StatsRecorder()
+    while eng.tick < 60:
+        eng.step()
+        if eng.tick % 10 == 0:
+            a.record(eng)
+    mid = eng.checksum()
+    # Re-record the same tick many times: the checksum cannot move.
+    for _ in range(5):
+        b.record(eng)
+    assert eng.checksum() == mid
+

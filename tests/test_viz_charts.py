@@ -395,6 +395,51 @@ def test_each_chart_block_declares_one_unit():
     assert "temperature" in keys and "moisture" in keys
 
 
+def test_bottleneck_chart_is_declared_and_drawn():
+    """IMPROVE §5: the two component drops get a chart of their own."""
+    from evolve.viz.analytics import FIELDS, _blocks
+
+    eng = Engine(small_config())
+    hist = AnalyticsHistory(interval=1)
+    for _ in range(5):
+        eng.step()
+        hist.maybe_sample(eng)
+    blocks = {b["key"]: b for b in _blocks(hist.arrays(), eng)}
+    assert "bottleneck" in blocks
+    assert blocks["bottleneck"]["unit"] == "fraction of peak 0–1"
+    # The three series exist in the history and are bounded fractions.
+    arr = hist.arrays()
+    for name in ("population_drop", "diversity_drop", "bottleneck"):
+        assert name in FIELDS
+        assert np.isfinite(arr[name]).all(), name
+        assert (arr[name] >= 0.0).all() and (arr[name] <= 1.0).all(), name
+    surf = _surface(1200, 800)
+    content, view = draw_analytics(surf, pygame.Rect(0, 0, 1200, 760),
+                                   _FONTS, _cache(), hist, eng)
+    assert content > 0 and view > 0
+
+
+def test_bottleneck_history_matches_the_stats_indicator():
+    """The live view and the CSV must describe the same quantity."""
+    from evolve.stats import bottleneck
+
+    eng = Engine(small_config(organisms=20))
+    hist = AnalyticsHistory(interval=1)
+    for _ in range(40):
+        eng.step()
+        hist.maybe_sample(eng)
+    arr = hist.arrays()
+    # Recompute the indicator from the history's own earlier samples.
+    rows = [{"population": float(arr["population"][i]),
+             "mean_pairwise": float(arr["mean_pairwise"][i])}
+            for i in range(arr["tick"].size - 1)]
+    expect = bottleneck(rows, int(arr["population"][-1]),
+                        float(arr["mean_pairwise"][-1]))
+    assert arr["population_drop"][-1] == float(
+        expect["population_drop"])
+    assert arr["bottleneck"][-1] == float(expect["bottleneck"])
+
+
 def test_analytics_scroll_never_draws_a_blank_frame():
     """Scrolling past the end used to render one empty frame, then clamp."""
     from evolve.viz.app import VizApp

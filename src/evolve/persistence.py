@@ -45,6 +45,8 @@ _INT_COLUMNS = frozenset({
     # appended in the upgrade
     "max_generation", "deaths_starvation", "deaths_senescence",
     "deaths_health", "deaths_predation",
+    # IMPROVE §5: a 0/1 flag, stored as an integer like the other flags
+    "bottleneck",
 })
 
 #: The 1-in-20 sampling rule for feeding edges (deterministic, order-free).
