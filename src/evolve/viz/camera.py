@@ -1,4 +1,4 @@
-"""World-to-screen transform with zoom and pan."""
+"""World-to-screen transform with zoom, pan and click unprojection."""
 from __future__ import annotations
 
 
@@ -18,6 +18,13 @@ class Camera:
         sy = (y - fy) * self.zoom + self.screen_h / 2.0
         return int(sx), int(sy)
 
+    def to_world(self, sx: float, sy: float) -> tuple[float, float]:
+        """Inverse of :meth:`to_screen`, wrapped into the world (torus-friendly)."""
+        fx, fy = self.focus
+        x = (sx - self.screen_w / 2.0) / self.zoom + fx
+        y = (sy - self.screen_h / 2.0) / self.zoom + fy
+        return (x % self.world_w, y % self.world_h)
+
     def scale(self, length: float) -> int:
         return max(1, int(length * self.zoom))
 
@@ -28,3 +35,14 @@ class Camera:
         fx, fy = self.focus
         self.focus = (min(max(fx + dx / self.zoom, 0.0), self.world_w),
                       min(max(fy + dy / self.zoom, 0.0), self.world_h))
+
+    def centre_on(self, x: float, y: float) -> None:
+        """Put a world point in the middle of the viewport (follow mode)."""
+        self.focus = (min(max(float(x), 0.0), self.world_w),
+                      min(max(float(y), 0.0), self.world_h))
+
+    def fit(self) -> None:
+        """Reset zoom and focus so the whole world fits the viewport."""
+        self.zoom = max(0.1, min(self.screen_w / self.world_w,
+                                 self.screen_h / self.world_h) * 0.99)
+        self.focus = (self.world_w / 2.0, self.world_h / 2.0)

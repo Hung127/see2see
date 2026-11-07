@@ -101,7 +101,9 @@ def collect(pop: Population, plants: Plants, fields: Fields, world: World,
         first[1:] = s[1:] != s[:-1]
         rows = s[first]
         out[rows, cls] = 1.0 - dd[first] / rvis[rows]
-        out[rows, cls + 1] = bb[first] / np.pi
+        # Mate has a distance channel only (index 6): index 7 is own energy.
+        if cls != 6:
+            out[rows, cls + 1] = bb[first] / np.pi
 
     # -- food: plants + carcasses --------------------------------------------
     food_x, food_y = [], []

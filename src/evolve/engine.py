@@ -66,6 +66,7 @@ class Engine:
         self.stats = None  # wired to StatsRecorder in Task 18
         self.last_sensors = np.zeros((0, 16))
         self.last_outputs = np.zeros((0, 8))
+        self.last_sensor_ids = np.zeros(0, dtype=np.int64)
         self._phen = np.zeros((0, 12))
         self._speed = np.zeros(0)
         self._seed()
@@ -228,6 +229,9 @@ class Engine:
         self.last_sensors = collect(self.population, self.plants, self.fields,
                                     self.world, self.cfg.organisms,
                                     carcasses=self.carcasses, grid=None)
+        # Row identity: slots are compacted and reordered *after* thinking, so
+        # keeping the ids lets the inspector map a vector to the right organism.
+        self.last_sensor_ids = self.population.id[self.population.alive].copy()
         weights = self.population.genome[:, N_TRAITS:]
         self.last_outputs = forward(self.last_sensors, weights)
         self._phen = phenotype(self.population.genome)
@@ -658,8 +662,11 @@ class Engine:
     def inspect(self, i: int) -> dict:
         """Full behavioural payload for one organism (slot index).
 
-        ``sensors``/``outputs`` are the last computed vectors; rows align with
-        slot order at think time (arrays are compacted before sensing).
+        ``sensors``/``outputs`` are the last vectors computed for *this* id. The
+        live slots are compacted and re-sorted after thinking, so rows are
+        matched by id, never by position; an organism born or dead since the
+        last think has no vector and reports zeros with ``has_last_vectors``
+        false rather than another animal's numbers.
         """
         from .brain import split as split_weights
 
@@ -670,9 +677,14 @@ class Engine:
             int(pop.parent_a[i]) if pop.parent_a[i] >= 0 else None,
             int(pop.parent_b[i]) if pop.parent_b[i] >= 0 else None,
         )
-        row = i if i < self.last_sensors.shape[0] else None
+        oid = int(pop.id[i])
+        row = None
+        if self.last_sensor_ids.size:
+            hits = np.flatnonzero(self.last_sensor_ids == oid)
+            if hits.size:
+                row = int(hits[0])
         return {
-            "id": int(pop.id[i]),
+            "id": oid,
             "age": int(pop.age[i]),
             "energy": float(pop.energy[i]),
             "body": float(pop.body[i]),
@@ -684,6 +696,7 @@ class Engine:
             "phenotypes": phenotype(genome[None, :])[0],
             "weights": {"W1": W1[0], "b1": b1[0], "W2": W2[0], "b2": b2[0],
                         "W3": W3[0], "b3": b3[0]},
+            "has_last_vectors": row is not None,
             "sensors": self.last_sensors[row].copy() if row is not None
                        else np.zeros(16),
             "outputs": self.last_outputs[row].copy() if row is not None

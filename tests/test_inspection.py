@@ -37,3 +37,49 @@ def test_inspect_parents():
     eng = Engine(small_config(organisms=5, seed=3))
     d = eng.inspect(0)
     assert d["parents"] == (None, None)  # founders
+
+
+def test_inspect_matches_vectors_by_id_not_slot():
+    """Rows of ``last_sensors`` are in think-time order, slots are re-sorted.
+
+    If any organism dies after thinking, slot ``i`` no longer corresponds to
+    row ``i``; the payload must still return the vectors belonging to the
+    organism at that slot. The death is forced here because a 30-organism
+    scene can run for hundreds of ticks without one.
+    """
+    eng = Engine(small_config(organisms=30, seed=1))
+    eng.step()
+    pop = eng.population
+    assert eng.last_sensor_ids.size == pop.n_alive
+    # Kill the two lowest slots, then re-densify exactly as ``step`` does.
+    pop.alive[0] = False
+    pop.alive[1] = False
+    pop.compact()
+    pop.sort_by_id()
+    shifted = False
+    for i in np.flatnonzero(pop.alive):
+        d = eng.inspect(int(i))
+        row = int(np.flatnonzero(eng.last_sensor_ids == d["id"])[0])
+        shifted |= row != int(i)
+        assert d["has_last_vectors"] is True
+        assert np.array_equal(d["sensors"], eng.last_sensors[row])
+        assert np.array_equal(d["outputs"], eng.last_outputs[row])
+    assert shifted, "slot order did not shift; the regression is untested"
+
+
+def test_inspect_reports_no_vectors_instead_of_someone_elses():
+    """A newborn has no think-time row, so it must report zeros, not a neighbour's."""
+    eng = Engine(small_config(organisms=20, seed=1))
+    eng.step()
+    # Give an organism a fresh id that appears in no think-time row.
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    i = int(idx[0])
+    real_id = int(pop.id[i])
+    pop.id[i] = 10_000
+    d = eng.inspect(i)
+    assert d["id"] == 10_000
+    assert d["has_last_vectors"] is False
+    assert not np.any(d["sensors"]) and not np.any(d["outputs"])
+    pop.id[i] = real_id
+

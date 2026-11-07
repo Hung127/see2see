@@ -30,7 +30,8 @@ src/evolve/
   experiments.py   scenarios A–H, hooks, scaling, pre-registered assay
   bench.py         throughput measurement and profiling
   cli.py           run / reproduce / report / viz / benchmark / experiments
-  viz/             app.py, render.py, camera.py, panels.py (pygame, optional)
+  viz/             app.py, render.py, camera.py, panels.py, palette.py
+                   (pygame, optional)
 ```
 
 ## The tick pipeline
@@ -98,6 +99,57 @@ Ties are broken by ascending organism/resource ID, never by array position.
 equal checksums are exchangeable. `tests/test_determinism.py` asserts identical
 state hashes for equal seeds and different hashes for different seeds, and
 `tests/test_snapshots.py` asserts resume-equals-continuation.
+
+## Viewer (`evolve.viz`)
+
+Pygame-only presentation layer; the engine never imports it. Modules:
+
+| Module | Responsibility |
+|---|---|
+| `app.py` | window, event loop, `ViewState`, click selection, follow, layer cycling, panel/help toggles, resize, population history, badges (tick, layer legend, extinction) |
+| `render.py` | world pass: field cells clipped to the viewport, plants, carcasses, organisms (colour = inherited diet gene), selection ring and heading arrow, world edge |
+| `panels.py` | sidebar/legend/footer/help text, sensor and output row formatting, text cache, scrolling with edge fades, sparkline |
+| `palette.py` | layer colours, layer cycle and plain-language layer labels, diet colour/word |
+| `camera.py` | world↔screen transform, zoom, pan, `centre_on`, `fit` |
+
+Design rules the code follows:
+
+* **Describe, never infer.** Role counts come from lifetime intake
+  (`stats.classify_roles`), diet colour from the preference gene and is
+  labelled as a gene, and "nothing detected" renders as `—` instead of a
+  fabricated value.
+* **Every mark is explained.** The legend uses the same `palette` functions the
+  world renderer uses, so a swatch cannot drift from the colour it claims to
+  describe. The layer badge names the active layer *and* what its colours mean
+  (`palette.LAYER_LABELS`). The inspector's selection ring carries a heading
+  tick drawn from the same `pop.heading` the motion update uses.
+* **Simulation truth only.** The inspector shows the exact vectors from the
+  last think step. Since slots are compacted and re-sorted after thinking,
+  `Engine.inspect` matches rows by organism **id** (`last_sensor_ids`) and
+  reports `has_last_vectors = False` for an organism with no row, rather than
+  showing a neighbour's numbers. Output rows report both the raw score and the
+  decoded attempt, mirroring `actions.decode` (including rest blocking eat and
+  attack and scaling throttle by `1 − o7`).
+* **Presentation cannot change state.** `ViewState` is never read by the
+  engine; pausing, zooming, scrolling and the help overlay do not advance or
+  perturb the simulation, and `r` builds a fresh `Engine` from the same config.
+  The guide is modal: while it is open, `handle_key` and `handle_click` act only
+  on closing (`h`/`esc`) and scrolling, and `launch` opens it once at startup.
+* **A death is reported as a death.** Selection is tracked by id; when the
+  inspected organism dies the panel returns to the population view, `EXTINCT`
+  is drawn on a backing plate over the field, and a warning line says what
+  happened instead of showing another animal under the same heading.
+* **Cheap drawing.** Field cells are clipped to the viewport, plants and
+  organisms are culled off-screen, and text surfaces are cached per
+  (font, string, colour).
+* **Fits the smallest window.** At `_MIN_SIZE` the footer swaps to a compact key
+  strip and drops the legend line rather than running under the window edge,
+  and the layer badge is ellipsised to the world viewport so it cannot paint
+  over the sidebar.
+
+Visual verification is headless: `SDL_VIDEODRIVER=dummy`, fixed camera, save a
+PNG per state (`tests/test_viz_smoke.py`, `tests/test_viz_panels.py`). No claim
+is made about interactive frame rate on real hardware.
 
 ## Persistence
 

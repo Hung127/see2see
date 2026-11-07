@@ -34,15 +34,21 @@ locus, age — never species labels, and they never imply an action.
 | 0–1 | nearest food (plant or carcass) | `1 − d/r_vision`, bearing/π |
 | 2–3 | nearest threat (visible, `M_t > 1.15·M`, `attack_t > 1`) | same |
 | 4–5 | nearest prey (visible, `M_t < 0.85·M`) | same |
-| 6–7 | nearest mate (visible, mature, `0.7·M ≤ M_t ≤ 1.43·M`) | same |
-| 8 | own energy | `E / E_max` |
-| 9 | own health | `health / health_max` |
-| 10 | own age | `age / lifespan` |
-| 11 | local temperature | `(T − 20)/15` |
-| 12 | local moisture | `2·m − 1` |
-| 13 | local plant biomass | `2·B_cell/10 − 1` |
-| 14 | local organism count | `2·n_cell/20 − 1` |
+| 6 | nearest mate closeness (visible, mature, `0.7·M ≤ M_t ≤ 1.43·M`) | `1 − d/r_vision` |
+| 7 | own energy | `E / E_max` |
+| 8 | own health | `health / health_max` |
+| 9 | own age | `age / lifespan` |
+| 10 | local temperature | `(T − 20)/15` |
+| 11 | local moisture | `2·m − 1` |
+| 12 | local plant biomass | `2·B_cell/10 − 1` |
+| 13 | local organism count (includes self) | `2·n_cell/20 − 1` |
+| 14 | threat-signal pheromone | `clip(pheromone, −1, 1)` |
 | 15 | reproduction drive | `(E − threshold)/(E_max − threshold)` |
+
+The mate category has a **distance channel only**: index 7 carries own energy,
+so no mate bearing is written. This is a known asymmetry in the current sensor
+set (the mate bearing is computed but has nowhere to go); it is documented
+rather than silently reinterpreted.
 
 Vision is a cone: a target is visible when `d ≤ r_vision` and
 `|bearing| ≤ vision_angle/2`. The nearest visible target wins; ties go to the

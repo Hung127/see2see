@@ -30,6 +30,60 @@ PYTHONPATH=src python3 -m evolve.cli experiments --all --out experiments_out/run
 
 Exit codes: `0` success, `2` configuration error, `3` snapshot version error.
 
+## Using the viewer
+
+`viz` opens a resizable window: the world on the left, a live information
+panel on the right, a control strip along the bottom.
+
+* **What you see.** Green specks are plants, brown lumps are carcasses and
+  dots are organisms. Organism colour is the **inherited `diet_preference`
+  gene** (green = plant-leaning, yellow = mixed, red = meat-leaning); it is a
+  gene, not an observed behaviour. The panel also reports roles **measured
+  from lifetime intake**, which can differ from the gene.
+* **Background layers.** `v` cycles climate → moisture → soil → temperature →
+  terrain. The badge in the top-left corner names the layer and spells out what
+  its colours mean (for example "moisture — brown is dry, blue is wet").
+* **First launch opens a guide.** `viz` starts with a modal five-minute guide
+  (also on `h`) that explains what the dots, colours and numbers mean. While it
+  is open only close (`h`/`esc`) and scroll act, so reading it cannot pause,
+  step or reset the run. The window is resizable; the text reflows and the
+  footer drops its legend line before it would ever run off the edge.
+* **Click to inspect.** Click any organism (a ring plus a heading arrow marks
+  it) to switch the panel to that individual: genes, reserve/health, parents,
+  lifetime intake and actions, then the exact 16 sensor values the network saw
+  and the 8 outputs it produced on its last think step. Sensors read `—` when
+  nothing was detected (the encoding is −1). `f` follows the selected animal,
+  `x` clears it. If it dies, a note says so and the panel returns to the
+  population view rather than silently showing a different animal.
+* **Reading the outputs.** Each row shows both the raw score and the decision:
+  a score above 0.5 means yes. `resulting speed` is what `actions.decode`
+  actually produced, so a resting organism shows no movement; `rest` also
+  blocks eating and attacking, and those rows say so.
+* **Statistics.** Population, births/deaths/mutations, role counts, the
+  conserved matter pools (plant biomass, carcasses, detritus, organism tissue,
+  soil nutrients), averages, the season phase and any active or scheduled
+  environmental event.
+* **Extinction** is a normal outcome: the screen says `EXTINCT`, the ledger
+  still balances, and `r` restarts the same seed.
+
+| Key | Action |
+|-----|--------|
+| `space` | pause / resume |
+| `s` | advance one tick |
+| `1` `2` `3` `4` | speed 1× / 2× / 5× / 20× |
+| arrows | pan · `+` / `-` zoom · `home` fit world |
+| click | select · `x` clear · `f` follow |
+| `v` | cycle environment layer |
+| `i` | show/hide the side panel |
+| `h` | full help overlay (modal; `esc` closes it) |
+| mouse wheel / `pgup` `pgdn` | scroll the panel or the help overlay |
+| `r` | restart from the seed |
+| `q` / `esc` | quit |
+
+The viewer is verified headlessly (`SDL_VIDEODRIVER=dummy` + screenshots) on a
+single-core machine; it has not been run on a desktop GPU or at 60 FPS under a
+large population, so treat frame-rate claims as unmeasured.
+
 ## What is in the box
 
 | Area | Document |
@@ -63,7 +117,7 @@ Exit codes: `0` success, `2` configuration error, `3` snapshot version error.
 
 ## Status
 
-Milestones M1–M7 are implemented and tested (158 tests). Measured throughput on
+Milestones M1–M7 are implemented and tested (181 tests). Measured throughput on
 a single-core machine misses the design's §11 targets — see
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the honest numbers. NEAT-style
 speciation (M8) is deferred.

@@ -1,75 +1,372 @@
-"""Minimal interactive view (DESIGN §10).
+"""Interactive view (DESIGN §10).
 
-Controls: space start/pause, ``s`` single step, ``r`` reset, ``1-4`` speed
-1x/2x/5x/20x, ``q``/escape quit, arrows pan, ``+``/``-`` zoom. The simulation
-never blocks on rendering: one frame pumps events, advances a fixed number of
-steps, then draws.
+The simulation never blocks on rendering: one frame pumps events, advances a
+fixed number of steps, then draws. All controls are listed in the footer and in
+the ``?`` help overlay, and the sidebar explains what every mark on screen is.
+
+Beginner affordances: a legend, plain-language statistics (births, deaths,
+roles by measured intake, conserved matter pools), a named environment layer,
+and a click-to-inspect readout of the exact last-tick sensor/output vectors the
+network saw and produced.
 """
 from __future__ import annotations
 
+import numpy as np
 import pygame
 
 from ..config import Config
 from ..engine import Engine
 from .camera import Camera
-from .render import draw
+from .palette import LAYER_LABELS, next_layer
+from .panels import (
+    FOOTER_H, MIN_WORLD_W, PANEL_W, SCROLL_STEP, TextCache, draw_footer,
+    draw_help, draw_sidebar,
+)
+from .render import draw_selection, draw_world
 
 _SPEEDS = {pygame.K_1: 1, pygame.K_2: 2, pygame.K_3: 5, pygame.K_4: 20}
+_DEFAULT_SIZE = (1400, 860)
+_MIN_SIZE = (MIN_WORLD_W + PANEL_W, 560)
+
+
+class ViewState:
+    """Presentation-only state; it never influences the simulation."""
+
+    def __init__(self, speed: int = 1) -> None:
+        self.speed = int(speed)
+        self.paused = False
+        self.layer = "climate"
+        self.show_panel = True
+        self.show_help = False
+        self.follow = False
+        self.scroll = 0
+        self.content_height = 0
+        self.view_height = 0
+        self.help_scroll = 0
+        self.help_height = 0
+        self.selected_id: int | None = None
+        self.selected: dict | None = None
+        self.selected_gone = False
+        self.inspect_tick: int = -1
+        self.history: list[tuple[int, int]] = []
 
 
 class VizApp:
     def __init__(self, engine: Engine, speed: int = 1,
-                 size: tuple[int, int] = (900, 700), title: str = "EVOLVE") -> None:
+                 size: tuple[int, int] = _DEFAULT_SIZE,
+                 title: str = "EVOLVE — artificial life") -> None:
         pygame.display.init()
         pygame.font.init()
         self.engine = engine
-        self.speed = int(speed)
+        self.state = ViewState(speed)
         self.running = True
-        self.paused = False
-        self.screen = pygame.display.set_mode(size)
+        self.size = (max(_MIN_SIZE[0], int(size[0])), max(_MIN_SIZE[1], int(size[1])))
+        self.screen = pygame.display.set_mode(self.size, pygame.RESIZABLE)
         pygame.display.set_caption(title)
         self.clock = pygame.time.Clock()
-        self.camera = Camera((engine.world.width, engine.world.height), size)
-        self.font = pygame.font.Font(None, 20)
+        self.fonts = self._make_fonts()
+        self.cache = TextCache()
+        self.camera = self._new_camera()
+
+    # -- layout ---------------------------------------------------------------
+    def _make_fonts(self) -> dict[str, pygame.font.Font]:
+        pygame.font.init()
+        # ``pygame.font.Font(None, size)`` uses the bundled default face, which
+        # exists on every pygame install and needs no system font search. The
+        # bundled face renders cramped lowercase below ~22 px (verified by
+        # screenshot on the test machine), so the smallest size used is 22.
+        return {
+            "title": pygame.font.Font(None, 31),
+            "big": pygame.font.Font(None, 46),
+            "body": pygame.font.Font(None, 25),
+            "small": pygame.font.Font(None, 22),
+        }
+
+    def _panel_rect(self) -> pygame.Rect:
+        if not self.state.show_panel:
+            return pygame.Rect(self.size[0], 0, 0, self.size[1])
+        return pygame.Rect(self.size[0] - PANEL_W, 0, PANEL_W,
+                           self.size[1] - FOOTER_H)
+
+    def _world_rect(self) -> pygame.Rect:
+        w = self.size[0] - (PANEL_W if self.state.show_panel else 0)
+        return pygame.Rect(0, 0, w, self.size[1] - FOOTER_H)
+
+    def _new_camera(self) -> Camera:
+        rect = self._world_rect()
+        cam = Camera((self.engine.world.width, self.engine.world.height),
+                     (rect.w, rect.h))
+        cam.fit()
+        return cam
+
+    # -- compatibility shorthands --------------------------------------------
+    @property
+    def speed(self) -> int:
+        return self.state.speed
+
+    @speed.setter
+    def speed(self, value: int) -> None:
+        self.state.speed = int(value)
+
+    @property
+    def paused(self) -> bool:
+        return self.state.paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        self.state.paused = bool(value)
 
     # -- input ----------------------------------------------------------------
     def handle_key(self, key: int) -> None:
+        state = self.state
+        # The guide is modal: while it is open, only closing and scrolling act,
+        # so a beginner cannot accidentally zoom, step or quit the simulation
+        # while reading it.
+        if state.show_help:
+            if key in (pygame.K_ESCAPE, pygame.K_h):
+                state.show_help = False
+            elif key == pygame.K_q:
+                self.running = False
+            elif key == pygame.K_PAGEUP:
+                state.help_scroll = max(0, state.help_scroll
+                                      - 8 * SCROLL_STEP)
+            elif key == pygame.K_PAGEDOWN:
+                state.help_scroll += 8 * SCROLL_STEP
+            return
         if key in (pygame.K_ESCAPE, pygame.K_q):
             self.running = False
         elif key == pygame.K_SPACE:
-            self.paused = not self.paused
+            state.paused = not state.paused
         elif key == pygame.K_s:
             self.engine.step()
+            self._refresh_selection()
         elif key == pygame.K_r:
             self.engine = Engine(self.engine.cfg)
+            state.selected_id = None
+            state.selected = None
+            state.selected_gone = False
+            self.camera = self._new_camera()
         elif key in _SPEEDS:
-            self.speed = _SPEEDS[key]
-        elif key == pygame.K_PLUS or key == pygame.K_EQUALS:
+            state.speed = _SPEEDS[key]
+        elif key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
             self.camera.zoom_by(1.25)
-        elif key == pygame.K_MINUS:
+        elif key in (pygame.K_MINUS, pygame.K_KP_MINUS):
             self.camera.zoom_by(0.8)
         elif key == pygame.K_LEFT:
+            state.follow = False
             self.camera.pan(-40.0, 0.0)
         elif key == pygame.K_RIGHT:
+            state.follow = False
             self.camera.pan(40.0, 0.0)
         elif key == pygame.K_UP:
+            state.follow = False
             self.camera.pan(0.0, -40.0)
         elif key == pygame.K_DOWN:
+            state.follow = False
             self.camera.pan(0.0, 40.0)
+        elif key == pygame.K_HOME:
+            state.follow = False
+            self.camera.fit()
+        elif key == pygame.K_v:
+            state.layer = next_layer(state.layer)
+        elif key == pygame.K_i:
+            state.show_panel = not state.show_panel
+            self.camera = self._resize_camera()
+        elif key == pygame.K_h:
+            state.show_help = True
+            state.help_scroll = 0
+        elif key == pygame.K_x:
+            self._clear_selection()
+        elif key == pygame.K_f:
+            state.follow = not state.follow and state.selected_id is not None
+        elif key == pygame.K_PAGEUP:
+            state.scroll = max(0, state.scroll - 8 * SCROLL_STEP)
+        elif key == pygame.K_PAGEDOWN:
+            state.scroll += 8 * SCROLL_STEP
+
+    def handle_click(self, pos: tuple[int, int], button: int = 1) -> None:
+        """Left click selects the nearest live organism under the cursor."""
+        if self.state.show_help:
+            return          # the guide is modal; a click must not change state
+        if button != 1 or not self._world_rect().collidepoint(pos):
+            return
+        wx, wy = self.camera.to_world(pos[0], pos[1])
+        pop = self.engine.population
+        idx = np.flatnonzero(pop.alive)
+        if idx.size == 0:
+            self._clear_selection()
+            return
+        d = self.engine.world.distance(pop.x[idx], pop.y[idx],
+                                       np.array([wx]), np.array([wy]))
+        best = int(np.argmin(d))
+        # 12 screen pixels tolerance, converted to world units.
+        if float(d[best]) * self.camera.zoom > 12.0:
+            self._clear_selection()
+            return
+        self.state.selected_id = int(pop.id[idx[best]])
+        self._refresh_selection()
+
+    # -- selection ------------------------------------------------------------
+    def _clear_selection(self) -> None:
+        self.state.selected_id = None
+        self.state.selected = None
+        self.state.selected_gone = False
+        self.state.follow = False
+
+    def _refresh_selection(self) -> None:
+        """Re-read the selected organism; mark it gone if it died.
+
+        ``engine.inspect`` rebuilds phenotypes and splits network weights, so it
+        is only repeated when the simulation has actually advanced.
+        """
+        sid = self.state.selected_id
+        if sid is None:
+            return
+        pop = self.engine.population
+        idx = np.flatnonzero(pop.alive)
+        hits = np.flatnonzero(pop.id[idx] == sid) if idx.size else np.zeros(0, int)
+        if hits.size == 0:
+            self.state.selected = None
+            self.state.selected_gone = True
+            self.state.follow = False
+            return
+        self.state.selected_gone = False
+        if self.state.selected is not None and self.state.inspect_tick == self.engine.tick:
+            payload = self.state.selected
+        else:
+            i = int(idx[int(hits[0])])
+            try:
+                payload = self.engine.inspect(i)
+            except Exception:  # an inspector must never take down the frame loop
+                payload = None
+            self.state.selected = payload
+            self.state.inspect_tick = self.engine.tick
+        if self.state.follow and payload is not None:
+            x, y = payload["position"]
+            self.camera.centre_on(x, y)
 
     # -- frame loop -----------------------------------------------------------
-    def run_frame(self) -> None:
+    def _handle_events(self) -> None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
                 self.handle_key(event.key)
-        if not self.paused:
-            for _ in range(self.speed):
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                self.handle_click(event.pos, event.button)
+            elif event.type == pygame.MOUSEWHEEL:
+                pos = pygame.mouse.get_pos()
+                if self.state.show_help:
+                    self.state.help_scroll = max(
+                        0, self.state.help_scroll
+                        - event.y * SCROLL_STEP)
+                elif self._panel_rect().collidepoint(pos):
+                    self.state.scroll = max(
+                        0, self.state.scroll - event.y * SCROLL_STEP)
+            elif event.type == pygame.VIDEORESIZE:
+                self.resize((event.w, event.h))
+
+    def resize(self, size: tuple[int, int]) -> None:
+        w = max(_MIN_SIZE[0], int(size[0]))
+        h = max(_MIN_SIZE[1], int(size[1]))
+        self.size = (w, h)
+        self.screen = pygame.display.set_mode(self.size, pygame.RESIZABLE)
+        self.camera = self._resize_camera()
+
+    def _resize_camera(self) -> Camera:
+        """Keep the world focus and zoom when the viewport changes size."""
+        rect = self._world_rect()
+        cam = Camera((self.engine.world.width, self.engine.world.height),
+                     (rect.w, rect.h))
+        cam.focus = self.camera.focus
+        cam.zoom = self.camera.zoom
+        return cam
+    def run_frame(self) -> None:
+        self._handle_events()
+        if not self.state.paused:
+            for _ in range(self.state.speed):
                 self.engine.step()
-        draw(self.engine, self.screen, self.camera, self.font)
+            self._refresh_selection()
+            self._record_history()
+        self.render()
         pygame.display.flip()
         self.clock.tick(60)
+
+    def _record_history(self, cap: int = 240) -> None:
+        """Population sparkline samples, one per rendered *frame* (not tick)."""
+        hist = self.state.history
+        hist.append((self.engine.tick, self.engine.population.n_alive))
+        if len(hist) > cap:
+            del hist[:len(hist) - cap]
+
+    def render(self) -> None:
+        rect = self._world_rect()
+        self.screen.set_clip(rect)
+        draw_world(self.engine, self.screen, self.camera, layer=self.state.layer)
+        draw_selection(self.engine, self.screen, self.camera,
+                       self.state.selected_id)
+        self.screen.set_clip(None)
+        if self.state.show_panel:
+            draw_sidebar(self.screen, self._panel_rect(), self.fonts, self.cache,
+                         self.engine, self.state)
+        draw_footer(self.screen, pygame.Rect(0, self.size[1] - FOOTER_H,
+                                             self.size[0], FOOTER_H),
+                    self.fonts, self.cache, self.state)
+        self._draw_badges(rect)
+        if self.state.show_help:
+            self.state.help_height = draw_help(
+                self.screen, pygame.Rect(0, 0, self.size[0], self.size[1]),
+                self.fonts, self.cache, self.state.help_scroll,
+                self.state.help_height)
+
+    def _draw_badges(self, rect: pygame.Rect) -> None:
+        """Top-left status strip: tick, and what the background layer means.
+
+        Fitted to the world viewport: with the panel open on a narrow window the
+        strip would otherwise run under the sidebar and collide with its title.
+        """
+        small = self.fonts["small"]
+        layer = self.state.layer
+        avail = max(120, rect.width - 16)
+        lines = [
+            (f"tick {self.engine.tick:,}  ·  {layer} layer", (226, 230, 238)),
+            (LAYER_LABELS.get(layer, layer), (148, 156, 170)),
+        ]
+        surfaces = [self.cache.fit(small, text, color, avail - 10)
+                    for text, color in lines]
+        pad = 5
+        width = max(s.get_width() for s in surfaces) + 2 * pad
+        height = sum(s.get_height() for s in surfaces) + 2 * pad
+        self.screen.fill((14, 16, 20), (6, 6, width, height))
+        y = 6 + pad
+        for surf in surfaces:
+            self.screen.blit(surf, (6 + pad, y))
+            y += surf.get_height()
+        if self.engine.population.n_alive == 0:
+            big = self.fonts["big"]
+            msg = self.cache.render(big, "EXTINCT — no organisms remain",
+                                    (236, 96, 88))
+            hint = self.cache.render(small, "R restarts from the seed · "
+                                           "the run is still valid data",
+                                     (226, 230, 238))
+            # A backing plate keeps the notice readable over the plant field.
+            pad = 18
+            w = max(msg.get_width(), hint.get_width()) + 2 * pad
+            h = msg.get_height() + hint.get_height() + 2 * pad + 8
+            plate = pygame.Surface((w, h), pygame.SRCALPHA)
+            plate.fill((12, 14, 18, 232))
+            px = rect.centerx - w // 2
+            py = rect.centery - h // 2
+            self.screen.blit(plate, (px, py))
+            pygame.draw.rect(self.screen, (70, 78, 92), (px, py, w, h), 1)
+            self.screen.blit(msg, (rect.centerx - msg.get_width() // 2,
+                                   py + pad))
+            self.screen.blit(hint, (rect.centerx - hint.get_width() // 2,
+                                    py + pad + msg.get_height() + 8))
+        if self.state.selected_gone and not self.state.show_panel:
+            msg = self.cache.render(small, "the selected organism died",
+                                    (245, 194, 92))
+            self.screen.blit(msg, (10, 8 + height + 6))
 
     def run(self) -> None:
         while self.running:
@@ -81,4 +378,9 @@ class VizApp:
 
 
 def launch(config: Config) -> None:
-    VizApp(Engine(config)).run()
+    app = VizApp(Engine(config))
+    # Open the guide once, before anything moves: a first-time user has no way
+    # to know what the dots mean, and the guide is modal so nothing happens
+    # behind their back while they read it. H or Escape closes it.
+    app.state.show_help = True
+    app.run()

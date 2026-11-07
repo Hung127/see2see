@@ -507,6 +507,19 @@ than 500 organisms and 2,000 ticks.
   on rendering. Verified headlessly via `SDL_VIDEODRIVER=dummy` with screenshot capture at fixed
   ticks (documented as a limitation: no human eye has watched it on this machine).
 
+> **Implementation note (viewer).** Implemented: camera pan/zoom/fit, environment layers
+> (climate/moisture/soil/temperature/terrain) with a plain-language layer badge, organisms coloured
+> by the diet gene and sized by `M`, plants and carcasses, a marked world edge, click-to-inspect
+> with the last sensor/output vectors and a heading arrow, follow, live population/matter/role
+> statistics with a population sparkline, active-event readout, footer key strip, a modal
+> first-run help guide (opened at launch, `h` reopens it, scrolling, `esc` closes), panel scrolling
+> with edge fades and a scrollbar, and a compact footer for the minimum window size. Not implemented:
+> colour modes beyond diet (measured role, lineage hash, age, energy), vision-cone overlay,
+> interaction flashes, seed entry, `F5`/`F9` save/load from the viewer, and the 380 live weight views
+> (the payload carries them and they are tested, but the panel does not render them). The inspector
+> shows one organism at a time; role counts come from intake, not from the gene. See
+> `ARCHITECTURE.md` §Viewer.
+
 ---
 
 ## 11. Performance strategy
