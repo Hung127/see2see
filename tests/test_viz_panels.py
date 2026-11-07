@@ -429,6 +429,28 @@ def test_footer_and_badge_fit_the_smallest_window():
     assert not (top == np.array(palette.TEXT)).all()
 
 
+def test_extinction_notice_fits_the_world_at_the_smallest_window():
+    """The notice is fitted to the world, not to the whole window.
+
+    At ``_MIN_SIZE`` the world is only 320 px wide. An unfitted 46 px headline
+    ran under the sidebar and off the left edge, which read as a broken overlay.
+    """
+    from evolve.viz.app import _MIN_SIZE, VizApp
+    eng = Engine(small_config(organisms=4))
+    app = VizApp(eng, size=_MIN_SIZE)
+    pop = eng.population
+    pop.alive[:] = False
+    pop.compact()
+    app.run_frame()
+    arr = pygame.surfarray.array3d(app.screen)   # (width, height, 3)
+    world = app._world_rect()
+    # Exact headline colour: the legend's carnivore swatch is a different red.
+    red = ((arr[:, :, 0] == 236) & (arr[:, :, 1] == 96) & (arr[:, :, 2] == 88))
+    assert red.any(), "the notice should have been drawn"
+    assert not red[world.right:].any()
+    assert not red[:world.x].any()
+
+
 def test_help_and_panel_scroll_one_step_per_notch():
     from evolve.viz.app import VizApp
     eng = Engine(small_config(organisms=6))

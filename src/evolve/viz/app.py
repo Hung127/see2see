@@ -344,30 +344,64 @@ class VizApp:
             self.screen.blit(surf, (6 + pad, y))
             y += surf.get_height()
         if self.engine.population.n_alive == 0:
-            big = self.fonts["big"]
-            msg = self.cache.render(big, "EXTINCT — no organisms remain",
-                                    (236, 96, 88))
-            hint = self.cache.render(small, "R restarts from the seed · "
-                                           "the run is still valid data",
-                                     (226, 230, 238))
-            # A backing plate keeps the notice readable over the plant field.
-            pad = 18
-            w = max(msg.get_width(), hint.get_width()) + 2 * pad
-            h = msg.get_height() + hint.get_height() + 2 * pad + 8
-            plate = pygame.Surface((w, h), pygame.SRCALPHA)
-            plate.fill((12, 14, 18, 232))
-            px = rect.centerx - w // 2
-            py = rect.centery - h // 2
-            self.screen.blit(plate, (px, py))
-            pygame.draw.rect(self.screen, (70, 78, 92), (px, py, w, h), 1)
-            self.screen.blit(msg, (rect.centerx - msg.get_width() // 2,
-                                   py + pad))
-            self.screen.blit(hint, (rect.centerx - hint.get_width() // 2,
-                                    py + pad + msg.get_height() + 8))
+            self._draw_extinct(rect)
         if self.state.selected_gone and not self.state.show_panel:
             msg = self.cache.render(small, "the selected organism died",
                                     (245, 194, 92))
             self.screen.blit(msg, (10, 8 + height + 6))
+
+    def _draw_extinct(self, rect: pygame.Rect) -> None:
+        """Centre the extinction notice inside the *world* viewport.
+
+        The notice is fitted to the world width: at the smallest window the
+        world is 320 px wide, and an unfitted 46 px headline ran under the
+        sidebar and off the left edge, which looked like a broken overlay.
+        """
+        small = self.fonts["small"]
+        avail = max(120, rect.width - 24)
+        headline = "EXTINCT — no organisms remain"
+        for name in ("big", "body", "small"):
+            font = self.fonts[name]
+            if font.size(headline)[0] <= avail:
+                break
+        msg = self.cache.fit(font, headline, (236, 96, 88), avail)
+        hint_lines = self._wrap_plain(small, "R restarts from the seed · "
+                                            "the run is still valid data", avail)
+        hint = [self.cache.render(small, line, (226, 230, 238))
+                for line in hint_lines]
+        # A backing plate keeps the notice readable over the plant field.
+        pad = 18
+        w = max([msg.get_width()] + [s.get_width() for s in hint]) + 2 * pad
+        h = (msg.get_height() + 2 * pad + 8
+             + sum(s.get_height() for s in hint))
+        plate = pygame.Surface((w, h), pygame.SRCALPHA)
+        plate.fill((12, 14, 18, 232))
+        px = max(rect.x + 6, min(rect.centerx - w // 2, rect.right - w - 6))
+        py = max(rect.y + 6, min(rect.centery - h // 2, rect.bottom - h - 6))
+        self.screen.blit(plate, (px, py))
+        pygame.draw.rect(self.screen, (70, 78, 92), (px, py, w, h), 1)
+        self.screen.blit(msg, (px + (w - msg.get_width()) // 2, py + pad))
+        y = py + pad + msg.get_height() + 8
+        for surf in hint:
+            self.screen.blit(surf, (px + (w - surf.get_width()) // 2, y))
+            y += surf.get_height()
+
+    @staticmethod
+    def _wrap_plain(font: pygame.font.Font, text: str,
+                    width: int) -> list[str]:
+        """Greedy word wrap used where a ``Panel`` cursor is not available."""
+        lines: list[str] = []
+        line = ""
+        for word in text.split():
+            trial = f"{line} {word}".strip()
+            if font.size(trial)[0] > width and line:
+                lines.append(line)
+                line = word
+            else:
+                line = trial
+        if line:
+            lines.append(line)
+        return lines
 
     def run(self) -> None:
         while self.running:
