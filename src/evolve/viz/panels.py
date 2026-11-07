@@ -879,7 +879,8 @@ HELP_BLOCKS = (
         "Environmental events (drought, rain, heatwave, cold snap, wildfire, "
         "nutrient pulse, blight) are physical: they change fields, health, plants "
         "or soil, never a genome. Active and next-scheduled events are listed in "
-        "the panel.",
+        "the panel. A local event is also outlined on the map in its own colour, "
+        "and the panel names that colour so you can find the affected patch.",
         "Keys: SPACE pause · S one tick · 1/2/3/4 speed 1/2/5/20× · arrows pan · "
         "+/− zoom · HOME reset view · click inspect · X clear · F follow · "
         "I panel · V layer · H this guide · R restart · Q quit.",
