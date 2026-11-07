@@ -274,12 +274,27 @@ class VizApp:
         self.camera = self._resize_camera()
 
     def _resize_camera(self) -> Camera:
-        """Keep the world focus and zoom when the viewport changes size."""
+        """Rebuild the camera for a new viewport.
+
+        If the reader never zoomed or panned, keep the whole world fitted: the
+        old magnification means something different in the new viewport, and
+        carrying it over silently cropped the world when the window shrank.
+        A zoom or focus the user chose is preserved.
+        """
         rect = self._world_rect()
+        old = self.camera
         cam = Camera((self.engine.world.width, self.engine.world.height),
                      (rect.w, rect.h))
-        cam.focus = self.camera.focus
-        cam.zoom = self.camera.zoom
+        old_fit = max(0.1, min(old.screen_w / old.world_w,
+                               old.screen_h / old.world_h) * 0.99)
+        untouched = (abs(old.zoom - old_fit) <= 1e-9
+                     and abs(old.focus[0] - old.world_w / 2.0) <= 1e-9
+                     and abs(old.focus[1] - old.world_h / 2.0) <= 1e-9)
+        if untouched:
+            cam.fit()
+        else:
+            cam.focus = old.focus
+            cam.zoom = old.zoom
         return cam
 
     def run_frame(self) -> None:

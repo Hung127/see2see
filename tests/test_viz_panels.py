@@ -451,6 +451,27 @@ def test_extinction_notice_fits_the_world_at_the_smallest_window():
     assert not red[:world.x].any()
 
 
+def test_resize_keeps_the_world_fitted_until_the_user_zooms():
+    """A smaller window must not silently crop the world.
+
+    ``_resize_camera`` carries zoom and focus across a resize. Carrying the
+    fitted zoom of a larger viewport into a smaller one magnified the world past
+    the viewport, so most of the map was invisible until the reader pressed
+    HOME — which looked like the simulation had shrunk.
+    """
+    from evolve.viz.app import _MIN_SIZE, VizApp
+    eng = Engine(small_config(organisms=6))
+    app = VizApp(eng, size=(1400, 860))
+    app.resize(_MIN_SIZE)
+    assert app.camera.zoom * eng.world.width <= app._world_rect().w + 1
+    assert app.camera.zoom * eng.world.height <= app._world_rect().h + 1
+    # A deliberate zoom is the reader's choice: keep it.
+    app.handle_key(pygame.K_PLUS)
+    z = app.camera.zoom
+    app.resize((1200, 800))
+    assert app.camera.zoom == z
+
+
 def test_help_and_panel_scroll_one_step_per_notch():
     from evolve.viz.app import VizApp
     eng = Engine(small_config(organisms=6))
