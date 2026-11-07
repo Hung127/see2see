@@ -864,15 +864,15 @@ def draw_footer(screen: pygame.Surface, rect: pygame.Rect,
     width = rect.width - 20
     lines = []
     full_keys = ("SPACE pause · S step · 1-4 speed 1/2/5/20× · click inspect "
-                 "· X clear · F follow · P perception · A charts · I panel "
-                 "· V layer · H help · Q quit")
+                 "· X clear · F follow · P perception · A charts · G ancestry "
+                 "· I panel · V layer · H help · Q quit")
     if small.size(full_keys)[0] <= width:
         lines.append(full_keys)
     else:
         # Narrow window: keep the controls that need no explanation and let the
         # legend drop off, rather than running text under the window edge.
         compact = ("SPACE pause · S step · 1-4 speed · click inspect · X clear "
-                   "· A charts · I panel · H help · Q quit")
+                   "· A charts · G ancestry · I panel · H help · Q quit")
         lines.append(compact)
     legend = ("Green = plant · brown = carcass · organism colour = inherited "
               "diet gene · background = environment layer · mass is conserved")
@@ -967,8 +967,8 @@ HELP_BLOCKS = (
         "and the panel names that colour so you can find the affected patch.",
         "Keys: SPACE pause · S one tick · 1/2/3/4 speed 1/2/5/20× · arrows pan · "
         "+/− zoom · HOME reset view · click inspect · X clear · F follow · "
-        "P perception · A analytics · I panel · V layer · H this guide · R "
-        "restart · Q quit.",
+        "P perception · A analytics · G ancestry · I panel · V layer · H this "
+        "guide · R restart · Q quit.",
     )),
     ("Charts, perception and ancestry", (
         "A opens the analytics view: population, births and deaths, biomass "
@@ -986,6 +986,14 @@ HELP_BLOCKS = (
         "the run logs lineage, the recorded chain further back. Founders have no "
         "recorded parents and evicted records are shown as unknown — ancestry is "
         "never guessed from genome similarity or ID order.",
+        "G opens the ancestry view: the selected animal's recorded ancestor "
+        "chain and the tree of its recorded descendants, with generation depth, "
+        "whether each one is alive or how it died, and the birth traits with "
+        "their change from the parent. A trait line appears only where it "
+        "differs, because most offspring inherit those traits unchanged. The "
+        "default traces the living animal with the most recorded descendants. "
+        "Mouse wheel scrolls; G returns to the world. A lineage here is a "
+        "descent chain, never a species.",
     )),
 )
 

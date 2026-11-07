@@ -17,6 +17,7 @@ import pygame
 from ..config import Config
 from ..engine import Engine
 from .analytics import AnalyticsHistory, draw_analytics
+from .ancestry import draw_ancestry
 from .camera import Camera
 from .palette import (
     LAYER_LABELS, layer_ramp, layer_scale_text, next_layer,
@@ -58,6 +59,13 @@ class ViewState:
         self.analytics_scroll = 0
         self.analytics_height = 0
         self.analytics_view = 0
+        # Ancestry view: another full-width presentation screen, built from
+        # recorded lineage only. Mutually exclusive with analytics so the two
+        # do not have to share a viewport or a scroll offset.
+        self.show_ancestry = False
+        self.ancestry_scroll = 0
+        self.ancestry_height = 0
+        self.ancestry_view = 0
         # Draw the selected organism's vision cone and detected targets.
         self.show_perception = True
 
@@ -99,26 +107,30 @@ class VizApp:
         }
 
     def _panel_rect(self) -> pygame.Rect:
-        if not self.state.show_panel or self.state.show_analytics:
+        if (not self.state.show_panel or self.state.show_analytics
+                or self.state.show_ancestry):
             return pygame.Rect(self.size[0], 0, 0, self.size[1])
         return pygame.Rect(self.size[0] - PANEL_W, 0, PANEL_W,
                            self.size[1] - FOOTER_H)
 
     def _world_rect(self) -> pygame.Rect:
-        if self.state.show_analytics:
-            return pygame.Rect(0, 0, 0, 0)   # analytics replaces the world view
+        if self.state.show_analytics or self.state.show_ancestry:
+            return pygame.Rect(0, 0, 0, 0)   # the full-screen views replace it
         w = self.size[0] - (PANEL_W if self.state.show_panel else 0)
         return pygame.Rect(0, 0, w, self.size[1] - FOOTER_H)
 
     def _analytics_rect(self) -> pygame.Rect:
         return pygame.Rect(0, 0, self.size[0], self.size[1] - FOOTER_H)
 
-    def _camera_rect(self) -> pygame.Rect:
-        """World viewport used for camera geometry, ignoring the analytics mode.
+    def _ancestry_rect(self) -> pygame.Rect:
+        return pygame.Rect(0, 0, self.size[0], self.size[1] - FOOTER_H)
 
-        The camera keeps its zoom and focus while the analytics view is open, so
-        leaving that view does not silently re-fit or crop the world. Using
-        ``_world_rect`` here would build a zero-sized camera when analytics was
+    def _camera_rect(self) -> pygame.Rect:
+        """World viewport used for camera geometry, ignoring the full-screen views.
+
+        The camera keeps its zoom and focus while analytics or ancestry is open,
+        so leaving that view does not silently re-fit or crop the world. Using
+        ``_world_rect`` here would build a zero-sized camera when either view was
         toggled on (and ``R`` can restart the run while it is open).
         """
         w = self.size[0] - (PANEL_W if self.state.show_panel else 0)
@@ -210,7 +222,17 @@ class VizApp:
             state.layer = next_layer(state.layer)
         elif key == pygame.K_a:
             state.show_analytics = not state.show_analytics
-            if not state.show_analytics:
+            if state.show_analytics:
+                state.show_ancestry = False
+            else:
+                self.camera = self._resize_camera()
+        elif key == pygame.K_g:
+            # Genealogy: the ancestry view, from recorded links only.
+            state.show_ancestry = not state.show_ancestry
+            if state.show_ancestry:
+                state.show_analytics = False
+                state.ancestry_scroll = 0
+            else:
                 self.camera = self._resize_camera()
         elif key == pygame.K_p:
             state.show_perception = not state.show_perception
@@ -309,6 +331,10 @@ class VizApp:
                     self.state.analytics_scroll = max(
                         0, self.state.analytics_scroll
                         - event.y * SCROLL_STEP)
+                elif self.state.show_ancestry:
+                    self.state.ancestry_scroll = max(
+                        0, self.state.ancestry_scroll
+                        - event.y * SCROLL_STEP)
                 elif self._panel_rect().collidepoint(pos):
                     self.state.scroll = max(
                         0, self.state.scroll - event.y * SCROLL_STEP)
@@ -376,6 +402,8 @@ class VizApp:
     def render(self) -> None:
         if self.state.show_analytics:
             self._render_analytics()
+        elif self.state.show_ancestry:
+            self._render_ancestry()
         else:
             self._render_world()
         draw_footer(self.screen, pygame.Rect(0, self.size[1] - FOOTER_H,
@@ -422,6 +450,24 @@ class VizApp:
         self.state.analytics_view = view
         self.state.analytics_scroll = max(
             0, min(self.state.analytics_scroll, max(0, content - view)))
+
+    def _render_ancestry(self) -> None:
+        rect = self._ancestry_rect()
+        # Same pre-draw clamp as analytics: an out-of-range offset carried in
+        # from a taller previous frame would otherwise render one blank frame
+        # before being corrected.
+        max_scroll = max(0, self.state.ancestry_height
+                            - self.state.ancestry_view)
+        if max_scroll:
+            self.state.ancestry_scroll = min(self.state.ancestry_scroll,
+                                             max_scroll)
+        content, view = draw_ancestry(
+            self.screen, rect, self.fonts, self.cache, self.engine,
+            self.state.selected_id, self.state.ancestry_scroll)
+        self.state.ancestry_height = content
+        self.state.ancestry_view = view
+        self.state.ancestry_scroll = max(
+            0, min(self.state.ancestry_scroll, max(0, content - view)))
 
     def _draw_badges(self, rect: pygame.Rect) -> None:
         """Top-left status strip: tick, and what the background layer means.
