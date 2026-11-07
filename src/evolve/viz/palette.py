@@ -26,6 +26,32 @@ WORLD_EDGE: Color = (74, 82, 96)
 
 LAYERS = ("climate", "moisture", "soil", "temperature", "terrain")
 
+# One colour per event kind, used to outline the affected area in the world.
+# These are outlines only: they mark where the physical effect is applied, not
+# a property of the organisms, so they must not reuse a diet or plant colour.
+EVENT_COLORS: dict[str, Color] = {
+    "drought": (232, 176, 96),
+    "heavy_rain": (104, 156, 236),
+    "heatwave": (240, 120, 84),
+    "cold_snap": (128, 196, 236),
+    "wildfire": (255, 138, 66),
+    "nutrient_pulse": (176, 212, 110),
+    "plant_blight": (188, 148, 216),
+}
+EVENT_DEFAULT: Color = (226, 230, 238)
+
+# Plain name of each outline colour, so the panel can point at the right ring
+# when two events are active at once.
+EVENT_COLOUR_WORDS: dict[str, str] = {
+    "drought": "sandy",
+    "heavy_rain": "blue",
+    "heatwave": "red",
+    "cold_snap": "pale blue",
+    "wildfire": "orange",
+    "nutrient_pulse": "green",
+    "plant_blight": "purple",
+}
+
 LAYER_LABELS = {
     "climate": "climate — moisture, warmth and soil richness",
     "moisture": "moisture — brown is dry, blue is wet",

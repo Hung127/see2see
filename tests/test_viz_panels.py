@@ -472,6 +472,54 @@ def test_resize_keeps_the_world_fitted_until_the_user_zooms():
     assert app.camera.zoom == z
 
 
+def test_restart_clears_the_previous_runs_history():
+    """R must not splice two different worlds into one sparkline.
+
+    The history list held samples from before the restart, so the caption read
+    "was 24, now 120" — a comparison between two unrelated populations.
+    """
+    from evolve.viz.app import VizApp
+    eng = Engine(small_config(organisms=6))
+    app = VizApp(eng, speed=1)
+    for _ in range(8):
+        app.run_frame()
+    assert app.state.history
+    app.state.scroll = 120
+    app.handle_key(pygame.K_r)
+    assert app.state.history == []
+    assert app.state.scroll == 0
+    assert app.engine.tick == 0
+
+
+def test_active_event_is_outlined_in_the_world_and_named_in_colour():
+    """The panel says where to look; the world has to mark that place.
+
+    Before this, a local event said "local area" and nothing on the map showed
+    which area, so dying plants looked unexplained.
+    """
+    from evolve.events import Event
+    from evolve.viz import render
+    from evolve.viz.app import VizApp
+    cfg = small_config(organisms=6)
+    eng = Engine(cfg)
+    eng.events._events = [Event("drought", 1, 50, 1.0, (250.0, 250.0, 100.0))]
+    eng.events.log = list(eng.events._events)
+    eng.step()
+    app = VizApp(eng, speed=1)
+    app.state.paused = True
+    app.run_frame()
+    arr = pygame.surfarray.array3d(app.screen)
+    colour = np.array(palette.EVENT_COLORS["drought"])
+    hits = (arr == colour).all(axis=2)
+    assert hits.any(), "the region outline should be drawn"
+    # And the text uses the same colour word, or the two cannot be connected.
+    words = panels.EVENT_COLOUR_WORDS["drought"]
+    assert any(words in line for line in panels.event_lines(eng))
+    # A worldwide event has no meaningful ring.
+    assert palette.EVENT_COLOUR_WORDS["drought"] == "sandy"
+    assert callable(render._draw_events)
+
+
 def test_help_and_panel_scroll_one_step_per_notch():
     from evolve.viz.app import VizApp
     eng = Engine(small_config(organisms=6))

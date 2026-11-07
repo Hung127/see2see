@@ -7,7 +7,8 @@ import pygame
 from ..engine import Engine
 from .camera import Camera
 from .palette import (
-    BG, CARCASS, PLANT, SELECTION, WORLD_EDGE, diet_color, layer_color,
+    BG, CARCASS, EVENT_COLORS, EVENT_DEFAULT, PLANT, SELECTION, WORLD_EDGE,
+    diet_color, layer_color,
 )
 
 
@@ -47,6 +48,9 @@ def draw_world(engine: Engine, screen: pygame.Surface, camera: Camera,
     _draw_plants(engine, screen, camera)
     _draw_carcasses(engine, screen, camera)
     _draw_organisms(engine, screen, camera)
+    # Event outlines sit above the organisms: they are an annotation about the
+    # area, and hiding them behind a single animal would defeat the point.
+    _draw_events(engine, screen, camera)
     # Thin outline of the simulated area, so the dark margin reads as "outside
     # the world" rather than as part of it.
     x0, y0 = camera.to_screen(0.0, 0.0)
@@ -105,6 +109,29 @@ def _draw_organisms(engine: Engine, screen: pygame.Surface, camera: Camera) -> N
         # blob as a plant, and a beginner cannot tell which specks are alive.
         pygame.draw.circle(screen, _rim(color), (sx, sy), radius)
         pygame.draw.circle(screen, color, (sx, sy), radius - 1)
+
+
+def _draw_events(engine: Engine, screen: pygame.Surface, camera: Camera) -> None:
+    """Outline the area each active environmental event is acting on.
+
+    The panel can name an event, but not *where* it is; without a mark the
+    reader sees plants dying in one corner with no stated cause. The disc is the
+    same ``region`` the scheduler applies, so the outline cannot drift from the
+    effect. Worldwide events have a huge radius and no meaningful outline.
+    """
+    events = getattr(engine, "events", None)
+    if events is None:
+        return
+    for ev in events.active(engine.tick):
+        cx, cy, radius = ev.region
+        if radius >= 1e8:
+            continue                      # worldwide: no local area to outline
+        sx, sy = camera.to_screen(cx, cy)
+        r = camera.scale(radius)
+        if r < 2 or r > 6 * max(camera.screen_w, camera.screen_h):
+            continue
+        colour = EVENT_COLORS.get(ev.kind, EVENT_DEFAULT)
+        pygame.draw.circle(screen, colour, (sx, sy), r, 2)
 
 
 def draw_selection(engine: Engine, screen: pygame.Surface, camera: Camera,

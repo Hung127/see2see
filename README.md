@@ -65,6 +65,11 @@ panel on the right, a control strip along the bottom.
   the season phase and any active or scheduled environmental event. The total
   is the conservation claim made checkable: if it ever drifted, you would see
   it there.
+* **Local events are marked on the map.** A drought, flood, heatwave, cold
+  snap, wildfire or blight that covers a region is outlined in its own colour,
+  and the panel names that colour ("inside the blue ring on the map"), so a
+  patch of dead plants has a stated cause and a location instead of being a
+  mystery. Worldwide events say "worldwide" and draw no ring.
 * **Scrolling.** When the panel is taller than the window it fades at the edge,
   shows a scrollbar and says "more below"; the wheel and page up/down scroll it.
 * **Extinction** is a normal outcome: the screen says `EXTINCT`, the ledger
@@ -121,7 +126,7 @@ large population, so treat frame-rate claims as unmeasured.
 
 ## Status
 
-Milestones M1–M7 are implemented and tested (192 tests). Measured throughput on
+Milestones M1–M7 are implemented and tested (194 tests). Measured throughput on
 a single-core machine misses the design's §11 targets — see
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the honest numbers. NEAT-style
 speciation (M8) is deferred.

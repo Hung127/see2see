@@ -122,7 +122,10 @@ Design rules the code follows:
   world renderer uses, so a swatch cannot drift from the colour it claims to
   describe. The layer badge names the active layer *and* what its colours mean
   (`palette.LAYER_LABELS`). The inspector's selection ring carries a heading
-  tick drawn from the same `pop.heading` the motion update uses.
+  tick drawn from the same `pop.heading` the motion update uses. A local
+  environmental event is outlined on the field with the `Event.region` the
+  scheduler actually applies, and the panel names that outline colour
+  (`palette.EVENT_COLOUR_WORDS`) so the text and the ring are one statement.
 * **Simulation truth only.** The inspector shows the exact vectors from the
   last think step. Since slots are compacted and re-sorted after thinking,
   `Engine.inspect` matches rows by organism **id** (`last_sensor_ids`) and

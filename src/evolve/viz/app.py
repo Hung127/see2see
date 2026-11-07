@@ -145,6 +145,11 @@ class VizApp:
             state.selected_id = None
             state.selected = None
             state.selected_gone = False
+            # The old samples belong to the previous run: keeping them made the
+            # sparkline claim "was 24, now 120" across two different worlds.
+            state.history.clear()
+            state.scroll = 0
+            state.follow = False
             self.camera = self._new_camera()
         elif key in _SPEEDS:
             state.speed = _SPEEDS[key]

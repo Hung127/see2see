@@ -13,8 +13,8 @@ import pygame
 
 from .. import stats as stats_mod
 from .palette import (
-    ACCENT, CARCASS, GOOD, LAYER_LABELS, PANEL_BG, PANEL_EDGE, PLANT, SELECTION,
-    TEXT, TEXT_DIM, TEXT_FAINT, WARN, diet_color,
+    ACCENT, CARCASS, EVENT_COLOUR_WORDS, GOOD, LAYER_LABELS, PANEL_BG,
+    PANEL_EDGE, PLANT, SELECTION, TEXT, TEXT_DIM, TEXT_FAINT, WARN, diet_color,
 )
 
 PANEL_W = 468
@@ -206,7 +206,15 @@ def event_lines(engine, max_lines: int = 3) -> list[str]:
     active = engine.events.active(engine.tick)
     lines: list[str] = []
     for ev in active[:max_lines]:
-        where = "worldwide" if ev.region[2] >= 1e8 else "local area"
+        # "local area" alone left the reader hunting the map for the affected
+        # patch, so the region gets an outline in the same colour (render.py)
+        # and the text says what that outline means.
+        if ev.region[2] >= 1e8:
+            where = "worldwide"
+        else:
+            where = (f"inside the "
+                     f"{EVENT_COLOUR_WORDS.get(ev.kind, 'white')} ring on "
+                     f"the map")
         left = max(0, ev.start_tick + max(1, int(ev.duration)) - engine.tick)
         lines.append(f"{KIND_INFO.get(ev.kind, ev.kind)} "
                      f"[{where}, {left} ticks left]")
