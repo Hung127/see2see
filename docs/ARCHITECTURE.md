@@ -154,8 +154,9 @@ Visual verification is headless: `SDL_VIDEODRIVER=dummy`, fixed camera, save a
 PNG per state (`tests/test_viz_smoke.py`, `tests/test_viz_panels.py`). No claim
 is made about interactive frame rate on real hardware. Measured on the
 development machine with the dummy driver and the simulation paused (drawing
-only, 500×500 world, 254 organisms): 8.8 ms per frame, about 114 fps. That
-figure excludes the simulation step and any real display driver.
+only, 500×500 world, 254 organisms, one event outline): 8.6 ms per frame,
+about 116 fps. That figure excludes the simulation step and any real display
+driver.
 
 ## Persistence
 
