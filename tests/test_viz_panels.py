@@ -397,6 +397,63 @@ def test_toggles_set_expectations():
     assert app.state.selected_id is None
 
 
+def test_network_summary_is_off_until_asked_for():
+    """§4.3: weights are on-demand. They must not be shown by default."""
+    from evolve.viz.app import VizApp
+    eng = Engine(small_config(organisms=4))
+    app = VizApp(eng, speed=1)
+    assert app.state.show_weights is False
+    app.handle_key(pygame.K_w)
+    assert app.state.show_weights is True
+    app.handle_key(pygame.K_w)
+    assert app.state.show_weights is False
+
+
+def test_weights_rows_summarise_the_real_network():
+    """The summary is a digest of the animal's own weights, not a placeholder."""
+    eng = Engine(small_config(organisms=4, seed=2))
+    eng.step()
+    payload = eng.inspect(0)
+    rows = dict(panels.weights_rows(payload))
+    # Every layer is named, and the counts match the declared shapes.
+    for label, _key, _shape in panels.WEIGHT_LAYERS:
+        assert label in rows, label
+        assert "params" in rows[label]
+    assert rows["parameters"].startswith("380 total")
+    assert "380 finite" in rows["parameters"]
+    assert "largest |weight|" in rows
+    # A zero network must report a zero magnitude, not hide the fact.
+    zero = dict(payload)
+    zero["weights"] = {k: np.zeros_like(v)
+                       for k, v in payload["weights"].items()}
+    zero_rows = dict(panels.weights_rows(zero))
+    assert "|w| mean 0.000" in zero_rows["W1 (16x12)"]
+    assert zero_rows["largest |weight|"].endswith("+0.000")
+
+
+def test_weights_rows_tolerate_a_missing_payload():
+    """The inspector must not blow up when no weights were captured."""
+    rows = dict(panels.weights_rows({}))
+    assert "380 total" in rows["parameters"]
+    assert rows["W1 (16x12)"].startswith("192 params")
+
+
+def test_weights_summary_does_not_change_the_simulation():
+    """Opening the network summary is presentation only, like every readout."""
+    from evolve.viz.app import VizApp
+    a = Engine(small_config(seed=6))
+    b = Engine(small_config(seed=6))
+    app = VizApp(a, speed=1)
+    app.state.show_weights = True
+    for _ in range(20):
+        app.run_frame()
+        app.handle_key(pygame.K_s)
+    for _ in range(a.tick):
+        b.step()
+    assert a.checksum() == b.checksum()
+
+
+
 def test_help_overlay_is_modal_and_escape_closes_it_first():
     from evolve.viz.app import VizApp
     eng = Engine(small_config(organisms=4))

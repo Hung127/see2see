@@ -173,8 +173,10 @@ Bounded by construction, not by hope:
 
 ## 6. New scientific metrics — **DONE**
 
-Thirteen columns were **appended** to `stats.COLUMNS` (never reordered, so old
-CSVs still parse by name):
+Fifteen columns were **appended** to `stats.COLUMNS` (never reordered, so old
+CSVs still parse by name), in two additive blocks — the second exists only
+because the first was already committed, and the schema rule is "append, never
+reorder":
 
 | Column | What it is | Observed or derived |
 |---|---|---|
@@ -186,6 +188,19 @@ CSVs still parse by name):
 | `deaths_starvation`, `deaths_senescence`, `deaths_health`, `deaths_predation` | causes, reconciled against `deaths_total` | observed |
 | `survival_median` | age at which half of all deaths fall | derived (histogram bin midpoint — stated as such) |
 | `population_cv` | coefficient of variation over the retained window | derived |
+| `environmental_stress` | mean drought stress **sampled at the living organisms' cells**, not world-wide | observed |
+| `behavioural_diversity` | mean pairwise distance between per-tick lifetime activity profiles (distance moved, bites, hunts, reproduction attempts, rest), on a ≤200-organism stride | derived from measured counters |
+
+`behavioural_diversity` is deliberately **not** genetic diversity: it never reads
+a genome. Two clones can behave differently and two genomes can behave
+identically, which is exactly why the brief lists it as a separate axis. The
+five activity dimensions are divided by each animal's own age and then by fixed
+*declared* reference rates (3 u/tick for movement, 1 event/tick for the rest) —
+normalising by the sample's own spread would give every run the same score.
+
+`environmental_stress` samples `fields.water_stress` at each animal's position,
+the same lookup the metabolism stage uses to charge the drought cost. Reporting
+the field mean instead would understate a population sheltering in dry cells.
 
 Supporting engine state, all statistics-only and excluded from `checksum()`:
 
@@ -347,12 +362,24 @@ reserve/capacity, health, body mass, diet gene *and* measured role,
 **controller**, speed/vision/cone, attack/defence, parent IDs, lifetime intake,
 reproduction attempts vs successes, lifetime actions, distance moved.
 
-**Analytics (`a`).** 19 chart blocks, each declaring **one unit** — population;
+**On-demand network inspection (`w`, §4.3).** The brief asks for neural
+inspection but explicitly says *not* to render all weights continuously, so the
+inspector shows a per-layer **summary** for the selected animal only: parameter
+count, mean |weight| and value range for `W1/b1/W2/b2/W3/b3`, the total
+parameter count and the single largest-magnitude connection with its index.
+`W` toggles it; it is off by default and is built from the same split of the
+genome's neural block that `brain.forward` multiplies, so it describes the
+network the animal actually ran. The engine's per-organism genome, physical
+traits, neural outputs, decoded actions and lifetime counters are all in the
+same panel; only the 380-number dump is withheld.
+
+**Analytics (`a`).** 21 chart blocks, each declaring **one unit** — population;
 births and deaths; biomass pools; reserve and body; speed; vision; genes;
 genetic variance; pairwise distance; temperature; moisture; generation depth;
 median age at death; deaths by cause; an age-at-death histogram; **live body-mass
 and reserve distributions** (computed at draw time, not stored per sample); CV;
-behaviour totals. Mixed-magnitude series were **split** rather than overlaid, so
+**drought stress where the animals are**; **behavioural diversity**; behaviour
+totals. Mixed-magnitude series were **split** rather than overlaid, so
 no axis has a meaningless unit. Charts print unit and range, `nan` breaks the
 line instead of becoming zero, and a series with no samples says so instead of
 drawing through nothing. Sampling is on **simulated ticks** (every 20), so the
@@ -393,10 +420,11 @@ approximation that changes what is on screen.
 
 ## 10. Test results — **DONE**
 
-`python3 -m pytest tests/ -o addopts="" -q` → **346 passed in 259.34 s**
-(a run before the last two fixes: 343 passed in 266.55 s). Suite grew from 196
-to 346 tests. No existing assertion was weakened or deleted; several were
-strengthened. The notable ones:
+`python3 -m pytest tests/ -o addopts="" -q` → **357 passed in 176.12 s**.
+(Earlier stages of the upgrade: 343 passed in 266.55 s, then 346 in 259.34 s;
+the runtime moves with the machine's load, not with correctness.) Suite grew
+from 196 to 357 tests. No existing assertion was weakened or deleted; several
+were strengthened. The notable ones:
 
 * `tests/test_optimization_equivalence.py` pins the three pre-upgrade checksums.
 * `tests/test_controllers.py` (24) covers the output contract, reproducibility,
@@ -404,13 +432,21 @@ strengthened. The notable ones:
   controller using its **own** RNG so the engine stream is untouched.
 * `tests/test_sensitivity.py` (11) covers config copy-not-mutate, type
   preservation, real config fields, and extinction being reported.
-* `tests/test_metrics.py` (10) covers the appended columns and that the original
-  block is a prefix of `COLUMNS`.
+* `tests/test_metrics.py` (17) covers the appended columns and that the original
+  block is a prefix of `COLUMNS`, plus the two second-block metrics: identical
+  profiles score zero, differing activity moves the score, the metric ignores
+  genomes, the profile is a per-tick rate (10-tick-old and 100-tick-old animals
+  with the same rate agree), and stress is sampled at the animals' cells rather
+  than world-wide.
 * `tests/test_lineage.py` (15) covers the bounded recorder, real birth traits,
   no fabrication, and that attaching it does not change the checksum.
 * `tests/test_viz_ancestry.py` (15), `test_viz_charts.py` (33),
-  `test_viz_panels.py` (42), `test_viz_render_lod.py` (7) and
-  `test_viz_smoke.py` (6) cover the viewer headlessly.
+  `test_viz_panels.py` (46), `test_viz_render_lod.py` (7) and
+  `test_viz_smoke.py` (6) cover the viewer headlessly. The four new panel tests
+  pin the on-demand network summary: off by default, `W` toggles it, the rows
+  describe the real weights (and a zero network reports zero rather than
+  hiding), a missing payload does not crash the inspector, and opening the
+  summary leaves the run's checksum untouched.
 
 Two real bugs were found and fixed by new tests rather than papered over:
 
@@ -450,6 +486,16 @@ Reported, not hidden:
 * **`rest_fraction` is a lifetime mean** over living organisms, not a per-tick
   population rate, and animals that died are not in the mean (their lifetime
   resting is not reconstructible from the live counters).
+* **`behavioural_diversity` is a five-dimension summary**, not a complete
+  behavioural repertoire. It measures the spread of per-tick rates of movement,
+  biting, attacking, reproduction attempts and resting over the *living*
+  population. Two animals can have the same summary and still differ in, say,
+  which food they chose or when they ran. It is reported separately from genetic
+  diversity precisely because it is not the same thing.
+* **`environmental_stress` is exposure, not harm.** It is the mean drought
+  modifier at the living animals' cells; the cost it implies depends on each
+  animal's basal metabolism, so two runs with the same column value need not
+  have paid the same price.
 * **Controller and sensitivity results here are underpowered nulls** (n = 2,
   short horizons), not findings. The neural arm is the random shipped MLP.
 * **The viewer's frame rate is unmeasured on a desktop GPU or under a large

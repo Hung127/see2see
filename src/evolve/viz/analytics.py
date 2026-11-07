@@ -55,6 +55,8 @@ FIELDS = (
     "mean_diet", "mean_generation", "trait_variance", "nn_variance",
     "mean_pairwise", "mean_temperature", "mean_moisture", "survival_median",
     "bites", "hunts", "repro_successes",
+    # IMPROVE §3.3: environmental stress and behavioural diversity.
+    "environmental_stress", "behavioural_diversity",
 )
 
 
@@ -159,12 +161,22 @@ class AnalyticsHistory:
             "mean_temperature": float(engine.fields.temperature.mean()),
             "mean_moisture": float(engine.fields.moisture.mean()),
             "survival_median": stats_mod._survival_median(engine),
+            "environmental_stress": self._environmental_stress(engine, idx),
+            "behavioural_diversity": stats_mod.behavioural_diversity(pop, idx),
             "bites": total("bites"),
             "hunts": total("hunts"),
             "repro_successes": total("repro_success"),
             **means,
         }
         return row
+
+    def _environmental_stress(self, engine, idx: np.ndarray) -> float:
+        """Mean drought stress at the living organisms' cells (see stats.py)."""
+        if idx.size == 0:
+            return 0.0
+        pop = engine.population
+        env = engine.fields.sample(pop.x[idx], pop.y[idx])
+        return float(env["water_stress"].mean())
 
     def arrays(self) -> dict[str, np.ndarray]:
         """All series as float arrays, aligned by sample (oldest first)."""
@@ -245,6 +257,10 @@ def _blocks(data: dict[str, np.ndarray], engine
          "title": "reserve distribution (living)", "unit": "organisms"},
         {"kind": "line", "key": "cv", "title": "population variability",
          "unit": "coefficient of variation"},
+        {"kind": "line", "key": "stress", "title": "drought stress where animals are",
+         "unit": "stress 0–1"},
+        {"kind": "line", "key": "behaviour_div", "title": "behavioural diversity",
+         "unit": "mean profile distance"},
         {"kind": "line", "key": "behaviour", "title": "behaviour totals (living)",
          "unit": "events"},
     ]
@@ -341,12 +357,22 @@ def _draw_block(screen, rect, fonts, cache, block: dict,
     elif key == "cv":
         series = [("CV in window", WARN, d["population_cv"])]
         caption = "coefficient of variation over the retained samples"
-    else:  # behaviour
+    elif key == "stress":
+        series = [("drought stress", (236, 150, 96), d["environmental_stress"])]
+        caption = "sampled where animals are; 0 outside a drought"
+    elif key == "behaviour_div":
+        series = [("mean profile distance", ACCENT, d["behavioural_diversity"])]
+        caption = ("spread of per-tick activity profiles; not genetic "
+                   "diversity")
+    elif key == "behaviour":
         series = [("bites", GOOD, d["bites"]),
                   ("attacks", BAD, d["hunts"]),
                   ("reproductions", ACCENT, d["repro_successes"])]
         caption = ("lifetime totals summed over the living population; "
                    "they reset when an organism dies")
+    else:  # a block was declared without a renderer: say so, never guess
+        series = []
+        caption = f"no renderer for chart {key!r}"
     line_chart(screen, rect, fonts, cache, title=title, y_unit=unit,
                series=series, x_labels=x, caption=caption)
 

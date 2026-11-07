@@ -72,6 +72,11 @@ class ViewState:
         self.run_label = ""
         # Draw the selected organism's vision cone and detected targets.
         self.show_perception = True
+        # On-demand network inspection (IMPROVE §4.3). Off by default: the
+        # inspector already shows senses and decisions, and dumping a summary of
+        # all 380 parameters on every selection would crowd that out. `W` asks
+        # for it for the selected animal only.
+        self.show_weights = False
 
 
 class VizApp:
@@ -240,6 +245,9 @@ class VizApp:
                 self.camera = self._resize_camera()
         elif key == pygame.K_p:
             state.show_perception = not state.show_perception
+        elif key == pygame.K_w:
+            # On-demand network inspection for the selected animal only.
+            state.show_weights = not state.show_weights
         elif key == pygame.K_i:
             state.show_panel = not state.show_panel
             self.camera = self._resize_camera()

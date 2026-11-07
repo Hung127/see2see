@@ -41,8 +41,12 @@ def test_new_columns_are_appended_and_unique():
         "trait_variance", "nn_variance", "mean_organism_biomass",
         "deaths_starvation", "deaths_senescence", "deaths_health",
         "deaths_predation", "survival_median", "population_cv",
+        # second additive block, appended after the first (IMPROVE §3.3)
+        "environmental_stress", "behavioural_diversity",
     }
     assert len(set(COLUMNS)) == len(COLUMNS)
+    # The pre-upgrade prefix is untouched and still a contiguous block.
+    assert COLUMNS[:len(original)] == original
 
 
 def test_death_causes_reconcile_with_deaths_total():
@@ -160,3 +164,96 @@ def test_generation_columns_track_turnover():
         living = eng.population.generation[np.flatnonzero(eng.population.alive)]
         assert row["max_generation"] == int(living.max())
         assert row["mean_generation"] == pytest.approx(float(living.mean()))
+
+
+# -- IMPROVE §3.3: environmental stress and behavioural diversity ------------
+def test_behavioural_diversity_is_zero_for_identical_profiles():
+    """The metric must measure behaviour, not the presence of a genome.
+
+    Two animals with the same lifetime activity rates behave identically, so
+    their profile distance is zero even though this function never looks at a
+    genome at all.
+    """
+    from evolve.stats import behavioural_diversity
+
+    eng = Engine(make_config(seed=3, n=6))
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    pop.age[idx] = 50
+    for name in ("dist_moved", "bites", "hunts", "repro_attempts", "rest_ticks"):
+        getattr(pop, name)[idx] = 7.0
+    assert behavioural_diversity(pop, idx) == pytest.approx(0.0)
+
+
+def test_behavioural_diversity_is_positive_when_activity_differs():
+    from evolve.stats import behavioural_diversity
+
+    eng = Engine(make_config(seed=3, n=6))
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    pop.age[idx] = 50
+    pop.bites[idx] = np.arange(idx.size, dtype=np.float64) * 10.0
+    assert behavioural_diversity(pop, idx) > 0.0
+    # A single animal has no pairwise distance to average.
+    assert behavioural_diversity(pop, idx[:1]) == pytest.approx(0.0)
+    assert behavioural_diversity(pop, np.zeros(0, dtype=np.int64)) == 0.0
+
+
+def test_behavioural_diversity_ignores_genes_but_responds_to_counters():
+    """Guard against the forbidden conflation of genetic and behaviour spread."""
+    from evolve.stats import behavioural_diversity
+
+    eng = Engine(make_config(seed=5, n=8))
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    pop.age[idx] = 40
+    same = np.repeat(pop.genome[idx][:1], idx.size, axis=0)
+    pop.genome[idx] = same
+    pop.hunts[idx] = 0.0
+    flat = behavioural_diversity(pop, idx)
+    pop.hunts[idx] = np.arange(idx.size, dtype=np.float64)
+    changed = behavioural_diversity(pop, idx)
+    assert flat == pytest.approx(0.0)
+    assert changed > flat
+
+
+def test_behaviour_profiles_are_per_tick_rates_not_lifetime_totals():
+    """A 10-tick-old and a 100-tick-old animal with the same rate match."""
+    from evolve.stats import behaviour_profiles
+
+    eng = Engine(make_config(seed=3, n=2))
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    pop.age[idx] = [10, 100]
+    pop.bites[idx] = [2.0, 20.0]       # 0.2 bites/tick in both cases
+    pop.hunts[idx] = [1.0, 10.0]
+    pop.dist_moved[idx] = [30.0, 300.0]
+    prof = behaviour_profiles(pop, idx)
+    assert prof.shape == (2, 5)
+    assert np.allclose(prof[0], prof[1])
+    assert prof[0, 1] == pytest.approx(0.2)   # bites per tick, unscaled
+
+
+def test_environmental_stress_samples_where_the_animals_are():
+    """The field mean is wrong if the population is not spread over the world."""
+    eng = Engine(make_config(seed=4, n=20))
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    # Put every animal in one cell and stress only that cell.
+    pop.x[idx] = 5.0
+    pop.y[idx] = 5.0
+    eng.fields.water_stress[:] = 0.0
+    ix, iy = eng.fields.cell_index(pop.x[idx], pop.y[idx])
+    eng.fields.water_stress[ix[0], iy[0]] = 0.5
+
+    row = StatsRecorder().record(eng)
+
+    assert row["environmental_stress"] == pytest.approx(0.5)
+    assert eng.fields.water_stress.mean() < 0.5
+
+
+def test_environmental_stress_is_zero_outside_a_drought():
+    eng = Engine(make_config(seed=4, n=20))
+    assert not eng.fields.water_stress.any()
+    assert StatsRecorder().record(eng)["environmental_stress"] == 0.0
+

@@ -32,6 +32,18 @@ _RING_BUFFER = 2000
 _DIVERSITY_CAP = 200
 _DIET_BINS = 20
 
+#: Fixed reference rates that put the five lifetime activity counters on a
+#: comparable scale before they are compared between organisms. These are
+#: *documented divisors*, not statistics of the current population: scaling by
+#: the population's own spread would make every run score the same value.
+#: ``dist_moved`` at max speed is ~3 u/tick; the other four counters are at most
+#: one event per tick, and ``rest_ticks / age`` is already a fraction.
+_BEHAVIOUR_SCALES = (3.0, 1.0, 1.0, 1.0, 1.0)
+
+#: Number of activity dimensions in a behaviour profile: distance moved, bites,
+#: hunts, reproduction attempts and rest, each as a per-tick lifetime rate.
+_BEHAVIOUR_DIMS = len(_BEHAVIOUR_SCALES)
+
 
 def classify_roles(plant_intake: np.ndarray, meat_intake: np.ndarray) -> list[str]:
     """Classify organisms by what they actually ate (DESIGN §8).
@@ -90,6 +102,69 @@ def diversity(genomes: np.ndarray) -> dict:
             "trait_variance": trait_variance, "nn_variance": nn_variance}
 
 
+def behaviour_profiles(pop, idx: np.ndarray) -> np.ndarray:
+    """Per-tick lifetime activity profile of each living organism, ``(n, 5)``.
+
+    Five activity dimensions, each divided by the animal's own age so a newborn
+    and an old survivor are comparable, then scaled by fixed reference rates:
+
+    ==============  ==================================================
+    column          meaning
+    ==============  ==================================================
+    ``dist_moved``  world units per tick (scaled by 3 u/tick ≈ max speed)
+    ``bites``       feeding attempts per tick
+    ``hunts``       attacks per tick
+    ``repro``       reproduction attempts per tick
+    ``rest``        fraction of life spent resting
+    ==============  ==================================================
+
+    The divisors are declared constants, not properties of the sample: the
+    profile has to be comparable between samples and between runs, so it must
+    not be normalised by whatever spread happens to exist in this population.
+    """
+    idx = np.asarray(idx)
+    n = idx.size
+    if n == 0:
+        return np.zeros((0, _BEHAVIOUR_DIMS))
+    age = np.maximum(1.0, np.asarray(pop.age[idx], dtype=np.float64))
+    profiles = np.empty((n, _BEHAVIOUR_DIMS), dtype=np.float64)
+    profiles[:, 0] = (np.asarray(pop.dist_moved[idx], dtype=np.float64)
+                      / age / _BEHAVIOUR_SCALES[0])
+    profiles[:, 1] = np.asarray(pop.bites[idx], dtype=np.float64) / age
+    profiles[:, 2] = np.asarray(pop.hunts[idx], dtype=np.float64) / age
+    profiles[:, 3] = (np.asarray(pop.repro_attempts[idx], dtype=np.float64)
+                      / age)
+    profiles[:, 4] = (np.asarray(pop.rest_ticks[idx], dtype=np.float64)
+                      / age)
+    return profiles
+
+
+def behavioural_diversity(pop, idx: np.ndarray) -> float:
+    """Mean pairwise distance between living behavioural profiles.
+
+    This is **behavioural** diversity, and it is deliberately reported apart
+    from genetic diversity: two clones can behave differently, and two different
+    genomes can behave identically. It is a *measured* spread over the five
+    activity counters' per-tick lifetime rates, not a fitness score and not a
+    proxy for species.
+
+    Costs O(n²) in the distance matrix on a deterministic ≤200-organism stride,
+    the same bound :func:`diversity` uses, so a large run pays a few thousand
+    float operations per sample rather than millions.
+    """
+    profiles = behaviour_profiles(pop, idx)
+    n = profiles.shape[0]
+    if n < 2:
+        return 0.0
+    stride = max(1, (n + _DIVERSITY_CAP - 1) // _DIVERSITY_CAP)
+    sample = profiles[::stride][: _DIVERSITY_CAP]
+    if sample.shape[0] < 2:
+        return 0.0
+    diffs = sample[:, None, :] - sample[None, :, :]
+    dists = np.sqrt((diffs ** 2).sum(-1))
+    return float(dists[np.triu_indices(sample.shape[0], 1)].mean())
+
+
 def _survival_median(engine) -> float:
     """Median age at death from the engine's bounded histogram.
 
@@ -133,6 +208,9 @@ COLUMNS = (
     "deaths_starvation", "deaths_senescence", "deaths_health", "deaths_predation",
     "survival_median",                    # age at which half of all deaths fall
     "population_cv",                      # coefficient of variation in window
+    # -- second additive block (IMPROVE §3.3, appended after the first) -------
+    "environmental_stress",               # mean drought stress where animals are
+    "behavioural_diversity",              # spread of activity profiles, not genes
 )
 
 #: Columns added in the upgrade. Kept separate so persistence/tests can tell the
@@ -266,9 +344,29 @@ class StatsRecorder:
             "deaths_predation": int(cause.get("predation", 0)),
             "survival_median": survival_median,
             "population_cv": self._population_cv(n),
+            # Second additive block (IMPROVE §3.3): ecology's "environmental
+            # stress" and behaviour's "behavioural diversity".
+            "environmental_stress": self._environmental_stress(engine, idx),
+            "behavioural_diversity": behavioural_diversity(pop, idx),
         }
         self.rows.append(row)
         return row
+
+    def _environmental_stress(self, engine, idx: np.ndarray) -> float:
+        """Mean drought stress *where the living organisms are*, not world-wide.
+
+        ``Fields.water_stress`` is a per-cell event modifier (zero except during a
+        drought). Reporting the field mean would understate the exposure of a
+        population sheltering in dry cells and overstate it for one in wet cells,
+        so this samples the field at each animal's position — the same operation
+        that already applies the stress cost in ``_metabolise``. It is an
+        observed environmental condition, not a derived rate.
+        """
+        if idx.size == 0:
+            return 0.0
+        pop = engine.population
+        env = engine.fields.sample(pop.x[idx], pop.y[idx])
+        return float(env["water_stress"].mean())
 
     def _population_cv(self, current: int) -> float:
         """Coefficient of variation of the recorded population in the window.

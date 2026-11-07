@@ -101,3 +101,26 @@ def test_inspect_names_the_decision_source():
     eng.controller = build_controller("rule")
     eng.step()
     assert eng.inspect(0)["controller"] == "rule"
+
+
+def test_inspect_weights_are_the_genome_neural_block():
+    """§4.3 inspection must expose the network the animal actually runs.
+
+    The payload already carried W1..b3; this pins that they are the genome's own
+    parameters (not a fresh random draw) and that they round-trip through
+    ``forward`` to the recorded output.
+    """
+    from evolve.brain import forward
+
+    eng = Engine(small_config(organisms=5, seed=4))
+    eng.step()
+    d = eng.inspect(0)
+    w = d["weights"]
+    genome_tail = eng.population.genome[0][N_TRAITS:]
+    rebuilt = np.concatenate([w["W1"].ravel(), w["b1"], w["W2"].ravel(),
+                              w["b2"], w["W3"].ravel(), w["b3"]])
+    assert np.allclose(rebuilt, genome_tail)
+    assert d["has_last_vectors"]
+    expected = forward(d["sensors"][None, :], genome_tail[None, :])[0]
+    assert np.allclose(d["outputs"], expected, atol=1e-12)
+

@@ -446,6 +446,64 @@ def decision_summary(payload: dict) -> str:
     return "; ".join(bits) if bits else "moving without eating, attacking or reproducing"
 
 
+#: Layer order and the human-readable shape of each block in the 380-parameter
+#: genome tail (see ``brain.split``). The names match the code, not a diagram.
+WEIGHT_LAYERS = (
+    ("W1 (16x12)", "W1", (16, 12)),
+    ("b1 (12)", "b1", (12,)),
+    ("W2 (12x8)", "W2", (12, 8)),
+    ("b2 (8)", "b2", (8,)),
+    ("W3 (8x8)", "W3", (8, 8)),
+    ("b3 (8)", "b3", (8,)),
+)
+
+
+def weights_rows(payload: dict) -> list[tuple[str, str]]:
+    """Compact per-layer summary of the network the organism actually runs.
+
+    IMPROVE §4.3 asks for on-demand neural inspection and explicitly says not to
+    render all weights continuously. So this is a *summary*, not a dump: for each
+    layer, its parameter count, mean magnitude and value range; then the single
+    largest connection in the whole network, named by layer and index. That is
+    enough to tell a live network from a degenerate one (all-zero, saturated, or
+    one dominant edge) without drawing 380 numbers every frame.
+
+    Nothing is inferred: the numbers come from ``Engine.inspect``'s split of the
+    genome's neural block, which is the same array ``brain.forward`` multiplies.
+    """
+    weights = payload.get("weights") or {}
+    rows: list[tuple[str, str]] = []
+    total = 0
+    finite_total = 0
+    best: tuple[float, str] | None = None
+    for label, key, shape in WEIGHT_LAYERS:
+        arr = np.asarray(weights.get(key, np.zeros(shape)), dtype=np.float64)
+        flat = arr.ravel()
+        total += flat.size
+        finite = flat[np.isfinite(flat)]
+        finite_total += finite.size
+        if finite.size:
+            magnitude = float(np.abs(finite).mean())
+            lo, hi = float(finite.min()), float(finite.max())
+            text = (f"{finite.size} params · |w| mean {magnitude:.3f} · "
+                    f"range {lo:+.2f} to {hi:+.2f}")
+        else:
+            text = f"{flat.size} params · no finite values"
+        rows.append((label, text))
+        if finite.size:
+            i = int(np.argmax(np.abs(flat)))
+            value = float(flat[i])
+            if best is None or abs(value) > abs(best[0]):
+                index = np.unravel_index(i, arr.shape) if arr.ndim > 1 else (i,)
+                where = ",".join(str(int(v)) for v in index)
+                best = (value, f"{key}[{where}]")
+    rows.append(("parameters", f"{total} total · {finite_total} finite"))
+    if best is not None:
+        rows.append(("largest |weight|", f"{best[1]} = {best[0]:+.3f}"))
+    return rows
+
+
+
 # ---------------------------------------------------------------------------
 # Pygame text helpers
 # ---------------------------------------------------------------------------
@@ -635,7 +693,17 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
             p.wrapped("No vector yet: this organism was born after the last "
                       "think step, so there is nothing to show until the "
                       "simulation advances.", TEXT_DIM, "small")
-        p.footer_hint("Click empty space or X to clear. F follows it. "
+        if getattr(state, "show_weights", False):
+            # IMPROVE §4.3: on demand only. A per-layer summary, never the full
+            # 380-number dump — see ``weights_rows``.
+            p.section("network (on demand)")
+            for label, value in weights_rows(selected):
+                p.row(label, value)
+            p.footer_hint("W toggles this summary. It is the organism's own "
+                          "inherited network, summarised per layer.")
+        p.footer_hint("Click empty space or X to clear. F follows it. " + (
+            "W hides the network summary. " if getattr(state, "show_weights", False)
+            else "W shows its network summary. ") +
                       "Mouse wheel scrolls this panel.")
         state.content_height = p.content_height()
         screen.set_clip(None)
@@ -692,8 +760,9 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
 CONTROL_LINES = (
     "SPACE pause · S step one tick · 1/2/3/4 speed 1/2/5/20×",
     "Click an organism to inspect it · X clear · F follow it · P perception",
-    "A analytics charts · G ancestry · arrows pan · + / − zoom · HOME reset",
-    "V environment layer · I show/hide this panel · H big help · R restart · Q quit",
+    "W show/hide its network summary · A analytics charts · G ancestry",
+    "Arrows pan · + / − zoom · HOME reset view · V environment layer",
+    "I show/hide this panel · H big help · R restart · Q quit",
 )
 
 
@@ -972,8 +1041,8 @@ HELP_BLOCKS = (
         "and the panel names that colour so you can find the affected patch.",
         "Keys: SPACE pause · S one tick · 1/2/3/4 speed 1/2/5/20× · arrows pan · "
         "+/− zoom · HOME reset view · click inspect · X clear · F follow · "
-        "P perception · A analytics · G ancestry · I panel · V layer · H this "
-        "guide · R restart · Q quit.",
+        "P perception · W network summary · A analytics · G ancestry · I panel "
+        "· V layer · H this guide · R restart · Q quit.",
     )),
     ("Charts, perception and ancestry", (
         "A opens the analytics view: population, births and deaths, biomass "
