@@ -232,6 +232,42 @@ in the code. Diversity proxies are named proxies: `mean_pairwise`,
 `nn_variance` are separate columns on purpose — they answer different questions
 ("is the phenotype pool narrowing?" vs "are the controllers diverging?").
 
+### Coverage against the IMPROVE §3.3 checklist
+
+The brief lists candidate statistics rather than a fixed schema. Where an item
+is served by an existing column the report names it instead of adding a
+duplicate column measuring the same quantity twice:
+
+| §3.3 group | Item | Where it lives | Kind |
+|---|---|---|---|
+| Population dynamics | birth rate, death rate, growth rate | `birth_rate`, `death_rate`, `growth_rate` | derived |
+| | extinction events | `StatsRecorder.extinctions` / `extinction_events()` | observed |
+| | survival duration | `survival_median` + `death_age_hist` | derived |
+| | population stability | `population_cv` | derived |
+| | generation turnover | `mean_generation`, `max_generation` | observed |
+| Evolution | trait distributions | `_blocks` histograms (body, reserve) + per-trait means | observed |
+| | trait variance / genetic diversity / NN diversity | `trait_variance`, `mean_pairwise`, `nn_variance` | observed |
+| | mutation statistics | `mean_mutation_rate`, `mutations_per_birth` | observed / derived |
+| | lineage depth | `LineageRecorder` generation + ancestry view | observed |
+| | generation-wise trait changes | `experiments._trait_drift` (first vs last), experiment summaries | derived |
+| Ecology | plant / organism / carcass biomass | `plant_biomass`, `mean_organism_biomass`, `carcass_biomass` | observed |
+| | resource consumption | `plant_intake`, `meat_intake` (run totals) | observed |
+| | predator/prey relationships | `strikes`, `strikes_hit`, `deaths_predation` | observed |
+| | trophic distribution | `herbivores`/`carnivores`/`omnivores`/`unclassified` (intake evidence, not diet gene) | derived |
+| | energy efficiency | `foraging_efficiency` (stats column); `energy_efficiency` (controller-eval endpoint) | derived |
+| | environmental stress | `environmental_stress` | observed |
+| | population density | not a stored column — computed from `population` and world area | derived |
+| Behavioural | movement, rest, feeding, attack, reproduction | per-organism counters + `mean_*` columns + `rest_fraction` | observed / derived |
+| | behavioural diversity | `behavioural_diversity` | derived |
+
+Two deliberate omissions: **population density** is not stored because it is a
+constant-area division of a column that is stored (and the arena size is in the
+config), and a stored duplicate would be a second definition to keep in sync;
+**trophic class** is derived from observed intake rather than the diet gene, so
+`diet_preference` stays a preference and `herbivores` stays evidence. Extinction
+events are kept as a compact list of distinct genome hashes, not per-organism
+history.
+
 ### Honest gaps in this area
 
 Two gaps found by the audit were **fixed** after the report was first written.
