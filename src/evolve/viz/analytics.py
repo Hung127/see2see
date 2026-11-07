@@ -163,26 +163,56 @@ class AnalyticsHistory:
 
 
 def _blocks(data: dict[str, np.ndarray], engine
-            ) -> list[tuple[str, str, str]]:
-    """``(kind, title, unit)`` chart descriptors, in reading order."""
+            ) -> list[dict]:
+    """Chart descriptors ``{kind, key, title, unit}``, in reading order.
+
+    Each line chart carries **one unit**. Mixing quantities of different
+    magnitude on a shared axis (vision ≈100 u beside a diet gene in [0, 1], or a
+    pairwise distance ≈1,400 beside a gene variance ≈0.05) flattens the small
+    series into the axis and makes the unit label meaningless, so those are
+    split instead of overlaid. The only shared-axis charts combine quantities
+    in the *same* unit (biomass pools in bu, births/deaths in individuals).
+    """
     return [
-        ("line", "population", "organisms"),
-        ("line", "births and deaths per sample", "individuals"),
-        ("line", "biomass pools", "bu"),
-        ("line", "mean reserve and body", "bu / organism"),
-        ("line", "mean traits", "physical units"),
-        ("line", "genetic diversity", "variance / distance"),
-        ("line", "environment", "°C / fraction"),
-        ("line", "generation depth and median survival", "ticks"),
-        ("bar", "deaths by cause (cumulative)", "deaths"),
-        ("hist", "age at death", "deaths"),
-        ("line", "population variability", "CV"),
-        ("line", "behaviour totals (living)", "events"),
+        {"kind": "line", "key": "population", "title": "population",
+         "unit": "organisms"},
+        {"kind": "line", "key": "births", "title": "births and deaths per sample",
+         "unit": "individuals"},
+        {"kind": "line", "key": "biomass", "title": "biomass pools", "unit": "bu"},
+        {"kind": "line", "key": "reserve", "title": "mean reserve and body",
+         "unit": "bu / organism"},
+        {"kind": "line", "key": "speed", "title": "mean max speed",
+         "unit": "world units / tick"},
+        {"kind": "line", "key": "vision", "title": "mean vision range",
+         "unit": "world units"},
+        {"kind": "line", "key": "genes", "title": "mean attack and diet genes",
+         "unit": "gene value 0–1 or 0–5"},
+        {"kind": "line", "key": "gene_variance", "title": "genetic variance",
+         "unit": "variance of gene values"},
+        {"kind": "line", "key": "pairwise", "title": "mean pairwise distance",
+         "unit": "world units"},
+        {"kind": "line", "key": "temperature", "title": "mean temperature",
+         "unit": "°C"},
+        {"kind": "line", "key": "moisture", "title": "mean moisture",
+         "unit": "fraction 0–1"},
+        {"kind": "line", "key": "generation", "title": "mean generation depth",
+         "unit": "generations"},
+        {"kind": "line", "key": "survival", "title": "median age at death",
+         "unit": "ticks"},
+        {"kind": "bar", "key": "deaths", "title": "deaths by cause (cumulative)",
+         "unit": "deaths"},
+        {"kind": "hist", "key": "age_at_death", "title": "age at death",
+         "unit": "deaths"},
+        {"kind": "line", "key": "cv", "title": "population variability",
+         "unit": "coefficient of variation"},
+        {"kind": "line", "key": "behaviour", "title": "behaviour totals (living)",
+         "unit": "events"},
     ]
 
 
-def _draw_block(screen, rect, fonts, cache, kind: str, title: str, unit: str,
+def _draw_block(screen, rect, fonts, cache, block: dict,
                 data: dict[str, np.ndarray], engine) -> None:
+    kind, title, unit = block["kind"], block["title"], block["unit"]
     d = data
     if kind == "bar":
         counts = getattr(engine, "death_counts", {}) or {}
@@ -205,54 +235,55 @@ def _draw_block(screen, rect, fonts, cache, kind: str, title: str, unit: str,
                   caption=f"age in ticks, {DEATH_AGE_BIN}-tick bins")
         return
     x = ("tick 0", f"tick {int(d['tick'][-1]) if d['tick'].size else 0:,}")
-    if title == "population":
+    key = block["key"]
+    caption = None
+    if key == "population":
         series = [("population", ACCENT, d["population"])]
-    elif title.startswith("births"):
+    elif key == "births":
         series = [("births", GOOD, d["births"]), ("deaths", BAD, d["deaths"])]
-    elif title.startswith("biomass"):
+        caption = "counts since the previous sample, not per tick"
+    elif key == "biomass":
         series = [
             ("plants", (104, 200, 112), d["plant_biomass"]),
             ("carcasses", (156, 124, 92), d["carcass_biomass"]),
             ("detritus", (120, 120, 96), d["detritus"]),
             ("animals", (232, 196, 120), d["organism_biomass"]),
         ]
-    elif title.startswith("mean reserve"):
+    elif key == "reserve":
         series = [("reserve", GOOD, d["mean_energy"]),
                   ("body", ACCENT, d["mean_body"])]
-    elif title.startswith("mean traits"):
-        series = [("speed", (120, 190, 240), d["mean_speed"]),
-                  ("vision", (168, 220, 140), d["mean_vision"]),
-                  ("attack", (236, 150, 120), d["mean_attack"]),
-                  ("diet gene", (226, 196, 96), d["mean_diet"])]
-    elif title.startswith("genetic"):
-        series = [("trait var", GOOD, d["trait_variance"]),
-                  ("NN var", ACCENT, d["nn_variance"]),
-                  ("pairwise dist", WARN, d["mean_pairwise"])]
-    elif title.startswith("environment"):
-        series = [("temperature °C", (236, 150, 96), d["mean_temperature"]),
-                  ("moisture 0–1", (120, 180, 240), d["mean_moisture"])]
-    elif title.startswith("generation"):
-        series = [("mean generation", ACCENT, d["mean_generation"]),
-                  ("median death age", WARN, d["survival_median"])]
-    elif title.startswith("population variability"):
+    elif key == "speed":
+        series = [("speed_max", (120, 190, 240), d["mean_speed"])]
+        caption = "gene-derived maximum, not the distance actually moved"
+    elif key == "vision":
+        series = [("vision_range", (168, 220, 140), d["mean_vision"])]
+    elif key == "genes":
+        series = [("attack (0–5)", (236, 150, 120), d["mean_attack"]),
+                  ("diet (0–1)", (226, 196, 96), d["mean_diet"])]
+        caption = "a preference, not observed intake"
+    elif key == "gene_variance":
+        series = [("trait loci", GOOD, d["trait_variance"]),
+                  ("network weights", ACCENT, d["nn_variance"])]
+        caption = "variance of gene values, not phenotype spread"
+    elif key == "pairwise":
+        series = [("mean pairwise distance", WARN, d["mean_pairwise"])]
+        caption = "phenotypic distance between sampled genomes"
+    elif key == "temperature":
+        series = [("temperature", (236, 150, 96), d["mean_temperature"])]
+    elif key == "moisture":
+        series = [("moisture", (120, 180, 240), d["mean_moisture"])]
+    elif key == "generation":
+        series = [("mean generation", ACCENT, d["mean_generation"])]
+    elif key == "survival":
+        series = [("median age at death", WARN, d["survival_median"])]
+        caption = "0 until the first death is recorded; a 25-tick bin midpoint"
+    elif key == "cv":
         series = [("CV in window", WARN, d["population_cv"])]
-    elif title.startswith("behaviour"):
+        caption = "coefficient of variation over the retained samples"
+    else:  # behaviour
         series = [("bites", GOOD, d["bites"]),
                   ("attacks", BAD, d["hunts"]),
                   ("reproductions", ACCENT, d["repro_successes"])]
-    else:
-        series = [("births", GOOD, d["births"]), ("deaths", BAD, d["deaths"])]
-    caption = None
-    if title.startswith("genetic"):
-        caption = ("variance of gene values, not phenotype spread; "
-                   "pairwise distance is capped at 200 genomes")
-    elif title.startswith("generation"):
-        caption = "median age at death is 0 until the first death is recorded"
-    elif title.startswith("births"):
-        caption = "counts since the previous sample, not per tick"
-    elif title.startswith("population variability"):
-        caption = "coefficient of variation over the retained samples"
-    elif title.startswith("behaviour"):
         caption = ("lifetime totals summed over the living population; "
                    "they reset when an organism dies")
     line_chart(screen, rect, fonts, cache, title=title, y_unit=unit,
@@ -305,11 +336,11 @@ def draw_analytics(screen: pygame.Surface, rect: pygame.Rect,
         "per-tick records", TEXT_FAINT), (inner.x, y))
     y += HEADER_H - fonts["small"].get_linesize()
 
-    for i, (kind, title, unit) in enumerate(blocks):
+    for i, block in enumerate(blocks):
         col = i % columns
         x = inner.x + col * (col_w + CHART_GAP)
-        block = pygame.Rect(x, y, col_w, chart_h)
-        _draw_block(screen, block, fonts, cache, kind, title, unit, data, engine)
+        rect_block = pygame.Rect(x, y, col_w, chart_h)
+        _draw_block(screen, rect_block, fonts, cache, block, data, engine)
         if col == columns - 1 or i == len(blocks) - 1:
             y += chart_h + CHART_GAP
     screen.set_clip(None)

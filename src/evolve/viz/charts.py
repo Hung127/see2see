@@ -154,7 +154,13 @@ def _value_range(arrays: list[np.ndarray], zero_based: bool
     if vmax - vmin < 1e-12:
         vmax = vmin + 1.0
     pad = 0.06 * (vmax - vmin)
-    return vmin - pad, vmax + pad
+    low = vmin - pad
+    # A zero-based quantity has a real floor at zero: padding below it invents a
+    # region no sample can occupy, and prints axis labels like "population −1.2"
+    # for a count that cannot be negative. Clamp instead of padding below zero.
+    if zero_based and vmin >= 0.0:
+        low = 0.0
+    return low, vmax + pad
 
 
 def line_chart(screen: pygame.Surface, rect: pygame.Rect,

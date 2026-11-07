@@ -349,3 +349,67 @@ def test_draw_analytics_uses_one_column_on_a_narrow_window():
     # The two-column grid is shorter: same blocks, half the rows.
     assert content_wide < content_narrow
     assert view > 0
+
+
+def test_zero_based_axis_never_prints_a_negative_floor():
+    """A count or a mass cannot be negative, so the axis must not go below 0.
+
+    Before the fix, `_value_range` padded 6 % below the minimum, so a
+    population of 21 was drawn on an axis reading -1.2 and biomass read -168.
+    A scale that claims a physically impossible region is a misleading scale.
+    """
+    for values in (np.array([21.0, 17.0]), np.array([3000.0, 1500.0]),
+                   np.zeros(3)):
+        low, high = charts._value_range([values], zero_based=True)
+        assert low == 0.0, values
+        assert high >= max(0.0, float(values.max()))
+
+
+def test_zero_based_axis_keeps_negative_data_in_view():
+    """Signed series (e.g. a temperature anomaly) must not be clipped at zero."""
+    low, high = charts._value_range([np.array([-5.0, 3.0])], zero_based=True)
+    assert low < -5.0 < 0.0 < high
+
+
+def test_each_chart_block_declares_one_unit():
+    """Charts mixing units flatten small series and make the unit label a lie."""
+    from evolve.viz.analytics import _blocks
+
+    eng = Engine(small_config())
+    hist = AnalyticsHistory(interval=1)
+    hist.maybe_sample(eng, force=True)
+    blocks = _blocks(hist.arrays(), eng)
+    keys = [b["key"] for b in blocks]
+    assert len(keys) == len(set(keys))          # dispatch keys are unique
+    # A per-organism or per-tick unit ("bu / organism", "world units / tick")
+    # describes one dimension. What must be gone is a label that names two
+    # unrelated dimensions joined together, which is what the old grid used.
+    banned = ("physical units", "variance / distance", "°C / fraction",
+              "a.u.", "various", "mixed")
+    for b in blocks:
+        assert b["unit"], b
+        assert b["unit"] not in banned, b
+    # The mixed-magnitude pairs that used to share one axis are now separate.
+    assert "vision" in keys and "genes" in keys
+    assert "gene_variance" in keys and "pairwise" in keys
+    assert "temperature" in keys and "moisture" in keys
+
+
+def test_analytics_scroll_never_draws_a_blank_frame():
+    """Scrolling past the end used to render one empty frame, then clamp."""
+    from evolve.viz.app import VizApp
+
+    eng = Engine(small_config())
+    app = VizApp(eng, speed=1, size=(1200, 700))
+    for _ in range(5):
+        app.run_frame()
+    app.handle_key(pygame.K_a)
+    app.run_frame()
+    app.state.analytics_scroll = 10 ** 6       # far past the end
+    app.render()
+    surf = pygame.surfarray.array3d(app.screen)
+    # The frame still shows the grid (it is not the flat background colour).
+    assert app.state.analytics_scroll <= max(0, app.state.analytics_height
+                                             - app.state.analytics_view)
+    colours = {tuple(c) for c in surf[::40, ::40].reshape(-1, 3)}
+    assert len(colours) > 3, "the analytics grid should still be drawn"

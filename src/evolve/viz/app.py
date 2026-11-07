@@ -406,14 +406,22 @@ class VizApp:
 
     def _render_analytics(self) -> None:
         rect = self._analytics_rect()
+        # Clamp the *previous* frame's known height before drawing. Clamping only
+        # after drawing left one blank frame at the bottom of the grid: the
+        # out-of-range offset pushed every chart above the clip, then the state
+        # was corrected for the next frame. The reader saw a flash of nothing.
+        max_scroll = max(0, self.state.analytics_height
+                            - self.state.analytics_view)
+        if max_scroll:
+            self.state.analytics_scroll = min(self.state.analytics_scroll,
+                                              max_scroll)
         content, view = draw_analytics(
             self.screen, rect, self.fonts, self.cache, self.analytics,
             self.engine, self.state.analytics_scroll)
         self.state.analytics_height = content
         self.state.analytics_view = view
-        max_scroll = max(0, content - view)
         self.state.analytics_scroll = max(
-            0, min(self.state.analytics_scroll, max_scroll))
+            0, min(self.state.analytics_scroll, max(0, content - view)))
 
     def _draw_badges(self, rect: pygame.Rect) -> None:
         """Top-left status strip: tick, and what the background layer means.
