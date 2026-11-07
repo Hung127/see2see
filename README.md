@@ -78,6 +78,15 @@ panel on the right, a control strip along the bottom.
   mystery. Worldwide events say "worldwide" and draw no ring.
 * **Scrolling.** When the panel is taller than the window it fades at the edge,
   shows a scrollbar and says "more below"; the wheel and page up/down scroll it.
+* **Ancestry (`g`).** A full-screen tree built from recorded parent links only:
+  the selected animal's recorded ancestor chain, then its recorded descendants
+  with generation, alive/dead status (and cause and tick of death), and the
+  phenotype recorded at birth. A trait line prints only where it differs from
+  the parent's — most offspring inherit those three traits unchanged. Founders
+  ("no parent recorded") and evicted records ("unknown — no record") are worded
+  differently, because they are different facts. Default traces the living
+  animal with the most recorded descendants. A lineage here is a descent chain,
+  never a species.
 * **Extinction** is a normal outcome: the screen says `EXTINCT`, the ledger
   still balances, and `r` restarts the same seed.
 
@@ -91,9 +100,10 @@ panel on the right, a control strip along the bottom.
 | `v` | cycle environment layer |
 | `p` | perception overlay for the selected animal |
 | `a` | analytics charts view |
+| `g` | ancestry (lineage) view |
 | `i` | show/hide the side panel |
 | `h` | full help overlay (modal; `esc` closes it) |
-| mouse wheel / `pgup` `pgdn` | scroll the panel, charts or help overlay |
+| mouse wheel / `pgup` `pgdn` | scroll the panel, charts, ancestry or help overlay |
 | `r` | restart from the seed |
 | `q` / `esc` | quit |
 
@@ -134,7 +144,14 @@ large population, so treat frame-rate claims as unmeasured.
 
 ## Status
 
-Milestones M1–M7 are implemented and tested (196 tests). Measured throughput on
+Milestones M1–M7 are implemented and tested (340 tests). Measured throughput on
 a single-core machine misses the design's §11 targets — see
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the honest numbers. NEAT-style
 speciation (M8) is deferred.
+
+The upgrade pass described in [`docs/UPGRADE.md`](docs/UPGRADE.md) added engine
+optimization, scientific metrics, a controller abstraction with evaluation
+baselines, a sensitivity harness and a redesigned viewer (overlays, inspector,
+analytics, ancestry). That document lists, per deliverable, what is fully
+implemented, what is partial, and what is deferred, together with the
+measurements behind each claim.
