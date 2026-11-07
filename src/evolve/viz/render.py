@@ -45,6 +45,35 @@ def draw_world(engine: Engine, screen: pygame.Surface, camera: Camera,
     pygame.draw.rect(screen, WORLD_EDGE, (x0, y0, x1 - x0, y1 - y0), 1)
 
 
+def _cell_mean_vision(engine: Engine) -> np.ndarray:
+    """Mean ``vision_range`` phenotype per field cell, over living organisms.
+
+    This is a *presentation-side* derivation: the engine has no vision field and
+    adding one would change snapshots and checksums for a property that only
+    exists to be drawn. The phenotype comes from the same ``phenotype`` mapping
+    the sensors use, so the overlay cannot disagree with what an animal sees.
+
+    Cells with no living organism are left as ``nan`` (no data). They are drawn
+    at the ramp's dark end, and the panel's numeric legend says the scale, so a
+    dark cell reads as "nothing here to measure", never as "vision = 0".
+    """
+    fields = engine.fields
+    n = fields.n
+    pop = engine.population
+    idx = np.flatnonzero(pop.alive)
+    mean = np.full((n, n), np.nan, dtype=np.float64)
+    if idx.size == 0:
+        return mean
+    vision = pop.phenotypes()[:, 2]          # compacted order matches ``idx``
+    ix, iy = fields.cell_index(pop.x[idx], pop.y[idx])
+    flat = ix * n + iy
+    total = np.bincount(flat, weights=vision, minlength=n * n)
+    count = np.bincount(flat, minlength=n * n)
+    present = count > 0
+    mean.reshape(-1)[present] = total[present] / count[present]
+    return mean
+
+
 def _draw_terrain(engine: Engine, screen: pygame.Surface, camera: Camera,
                   layer: str) -> None:
     """Fill the visible field cells with the layer's colour.
@@ -58,15 +87,21 @@ def _draw_terrain(engine: Engine, screen: pygame.Surface, camera: Camera,
     fields = engine.fields
     cell = fields.cell_size
     ix0, ix1, iy0, iy1 = _cell_range(camera, fields.n, cell)
+    vision = _cell_mean_vision(engine) if layer == "vision" else None
     for iy in range(iy0, iy1):
         for ix in range(ix0, ix1):
+            vision_range = None
+            if vision is not None:
+                value = float(vision[ix, iy])
+                vision_range = None if value != value else value
             color = layer_color(layer, float(fields.temperature[ix, iy]),
                                 float(fields.moisture[ix, iy]),
                                 float(fields.soil[ix, iy]),
                                 float(fields.terrain[ix, iy]),
                                 plant_density=float(fields.plant_density[ix, iy]),
                                 organism_density=float(fields.organism_density[ix, iy]),
-                                pheromone=float(fields.pheromone[ix, iy]))
+                                pheromone=float(fields.pheromone[ix, iy]),
+                                vision_range=vision_range)
             x0, y0 = camera.to_screen(ix * cell, iy * cell)
             x1, y1 = camera.to_screen((ix + 1) * cell, (iy + 1) * cell)
             pygame.draw.rect(screen, color, (x0, y0, x1 - x0 + 1, y1 - y0 + 1))

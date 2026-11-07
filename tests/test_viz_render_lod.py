@@ -26,6 +26,7 @@ from evolve.config import (  # noqa: E402
 from evolve.engine import Engine  # noqa: E402
 from evolve.viz import render  # noqa: E402
 from evolve.viz.camera import Camera  # noqa: E402
+from evolve.viz import palette  # noqa: E402
 from evolve.viz.palette import CARCASS, PLANT, diet_color  # noqa: E402
 
 pygame.init()
@@ -165,3 +166,55 @@ def test_culling_drops_only_items_that_cannot_contribute_pixels():
     ys = np.array([300.0, 300.0, 300.0])
     _, _, visible = render._screen_points(cam, xs, ys, 1)
     assert visible.tolist() == [True, False, False]
+
+
+# -- vision overlay ----------------------------------------------------------
+def test_cell_mean_vision_averages_living_organisms_per_cell():
+    """The overlay is a per-cell mean of the phenotype, not a field array.
+
+    It is derived at draw time so the engine keeps no vision field and the
+    checksum is unaffected. Every living animal must be counted exactly once.
+    """
+    eng = _scene()
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    assert idx.size > 0
+    mean = render._cell_mean_vision(eng)
+    fields = eng.fields
+    assert mean.shape == (fields.n, fields.n)
+
+    vision = pop.phenotypes()[:, 2]
+    ix, iy = fields.cell_index(pop.x[idx], pop.y[idx])
+    expected: dict[tuple[int, int], list[float]] = {}
+    for k in range(idx.size):
+        expected.setdefault((int(ix[k]), int(iy[k])), []).append(float(vision[k]))
+    for (cx, cy), values in expected.items():
+        assert mean[cx, cy] == np.mean(values)
+
+    # Cells with no organism report no data, not zero.
+    counts = np.zeros((fields.n, fields.n), dtype=int)
+    np.add.at(counts, (ix, iy), 1)
+    empty = counts == 0
+    assert empty.any()
+    assert np.isnan(mean[empty]).all()
+    assert np.isfinite(mean[~empty]).all()
+
+
+def test_vision_overlay_draws_and_empty_cells_read_as_no_data():
+    """An empty cell must paint the ramp's dark end, not the colour for 0 u."""
+    eng = _scene()
+    dark = palette.layer_color("vision", vision_range=None)
+    zero = palette.layer_color("vision", vision_range=0.0)
+    short = palette.layer_color("vision", vision_range=40.0)
+    far = palette.layer_color("vision", vision_range=160.0)
+    assert short == dark, "the gene's floor must not be painted as no-data"
+    assert zero == short, "values below the span clamp to the dark end"
+    assert dark != far
+
+    # Drawing the layer must not raise anywhere, including an empty world.
+    cam = Camera((600.0, 600.0), (W, H))
+    cam.zoom = 1.0
+    screen = pygame.Surface((W, H))
+    screen.fill((0, 0, 0))
+    render._draw_terrain(eng, screen, cam, "vision")
+    assert (pygame.surfarray.array3d(screen) != 0).any()

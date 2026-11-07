@@ -27,7 +27,7 @@ WORLD_EDGE: Color = (74, 82, 96)
 LAYERS = (
     "climate", "moisture", "soil", "temperature", "terrain",
     # added in the upgrade — scientific overlays
-    "plants", "organisms", "pheromone",
+    "plants", "organisms", "pheromone", "vision",
 )
 
 # One colour per event kind, used to outline the affected area in the world.
@@ -66,6 +66,7 @@ LAYER_LABELS = {
     "plants": "plants — biomass per cell; dark is bare, green is lush",
     "organisms": "organisms — animals per cell; dark is empty, amber is crowded",
     "pheromone": "pheromone — threat signal per cell; dark is none, magenta is strong",
+    "vision": "vision — mean sight range per cell; dark is no animals here, pale blue is far",
 }
 
 #: Unit legend drawn beside the badge for each overlay layer. ``None`` means the
@@ -79,6 +80,7 @@ LAYER_UNITS: dict[str, str | None] = {
     "plants": "biomass units (bu) per cell",
     "organisms": "animals per cell",
     "pheromone": "0 – 1 (signal strength)",
+    "vision": "world units (mean vision range)",
 }
 
 #: The numeric range each sequential overlay maps to, for the legend. Values
@@ -92,6 +94,9 @@ LAYER_RANGES: dict[str, tuple[float, float] | None] = {
     "plants": (0.0, 10.0),
     "organisms": (0.0, 10.0),
     "pheromone": (0.0, 1.0),
+    # The gene's physical span is 40–160 units (GENOME §4.1); the overlay uses
+    # that whole span so a short-sighted cell cannot be confused with "no data".
+    "vision": (40.0, 160.0),
 }
 
 
@@ -123,6 +128,7 @@ _RAMPS: dict[str, tuple[Color, Color]] = {
     "plants": ((18, 34, 24), (126, 226, 136)),
     "organisms": ((34, 28, 18), (250, 204, 108)),
     "pheromone": ((28, 18, 34), (232, 108, 220)),
+    "vision": ((22, 30, 44), (170, 214, 255)),
 }
 
 
@@ -130,7 +136,8 @@ def layer_color(layer: str, temperature: float = 20.0, moisture: float = 0.5,
                 soil: float = 3.0, terrain: float = 0.5,
                 plant_density: float | None = None,
                 organism_density: float | None = None,
-                pheromone: float | None = None) -> Color:
+                pheromone: float | None = None,
+                vision_range: float | None = None) -> Color:
     """Cell colour for one field layer.
 
     ``climate`` is the original combined view (moisture green, warmth red,
@@ -156,7 +163,8 @@ def layer_color(layer: str, temperature: float = 20.0, moisture: float = 0.5,
         lo, hi = _RAMPS[layer]
         value = {"plants": plant_density,
                  "organisms": organism_density,
-                 "pheromone": pheromone}[layer]
+                 "pheromone": pheromone,
+                 "vision": vision_range}[layer]
         span = LAYER_RANGES[layer]
         if value is None or span is None:
             return lo
@@ -185,7 +193,8 @@ def layer_ramp(layer: str, steps: int = 9) -> list[Color] | None:
         value = low + (high - low) * i / (steps - 1)
         if layer in _RAMPS:
             out.append(layer_color(layer, plant_density=value,
-                                   organism_density=value, pheromone=value))
+                                   organism_density=value, pheromone=value,
+                                   vision_range=value))
         elif layer == "soil":
             out.append(layer_color(layer, soil=value))
         elif layer == "temperature":

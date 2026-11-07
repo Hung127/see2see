@@ -63,12 +63,14 @@ def test_layer_colors_are_bounded_and_distinct():
     terrain or one of the three overlays sees a different value at each end.
     """
     def at(low: bool):
-        # low/high for every quantity a layer might read.
+        # low/high for every quantity a layer might read. The vision overlay
+        # reads a phenotype in world units, not a 0-1 field, so it sweeps its
+        # declared span rather than the unit interval.
         v = 0.0 if low else 1.0
         return dict(temperature=-30.0 + 90.0 * v, moisture=v,
                     soil=6.0 * v, terrain=v,
                     plant_density=10.0 * v, organism_density=10.0 * v,
-                    pheromone=v)
+                    pheromone=v, vision_range=40.0 + 120.0 * v)
 
     for name in palette.LAYERS:
         lo, hi = at(True), at(False)
