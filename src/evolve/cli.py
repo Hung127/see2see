@@ -115,6 +115,10 @@ def _parser() -> argparse.ArgumentParser:
                      help="paired seeds (one run per controller per seed)")
     ctl.add_argument("--ticks", type=int, default=None,
                      help="override the config horizon")
+    ctl.add_argument("--warmup", type=int, default=0,
+                     help="evolve the population for N ticks with the model's "
+                          "own MLP, then evaluate every controller from that "
+                          "same snapshot (0 = random founders, the default)")
     ctl.add_argument("--population", type=int, default=None,
                      help="override the founder population")
     ctl.add_argument("--config", default=None,
@@ -326,7 +330,7 @@ def _cmd_controllers(args) -> int:
     summary = run_controller_comparison(
         args.out, controllers=args.only, seeds=args.seeds,
         ticks=args.ticks, config_path=args.config,
-        population=args.population)
+        population=args.population, warmup_ticks=args.warmup)
     print(f"controller comparison: {len(summary['rows'])} runs, "
           f"{summary['ticks']} ticks, seeds {summary['seeds']} -> {args.out}")
     for r in summary["rows"]:

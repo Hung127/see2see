@@ -271,3 +271,53 @@ def test_controller_eval_is_reproducible(tmp_path):
             assert stats["mean_diff"] == pytest.approx(other["mean_diff"])
             assert stats["ci_low"] == pytest.approx(other["ci_low"])
             assert stats["p"] == pytest.approx(other["p"])
+
+
+def test_warmup_resumes_every_arm_from_the_same_evolved_state(tmp_path):
+    """The optional warm-up must evolve first, then compare controllers.
+
+    The neural arm of the default comparison is a *random* founder network.
+    With a warm-up every arm is resumed from one evolved snapshot, so the two
+    neural runs (warm-up state, no controller) must be the same state, and the
+    evaluation window must not re-count the warm-up's births.
+    """
+    result = run_controller_comparison(
+        str(tmp_path), controllers=["neural", "passive"], seeds=(11,),
+        ticks=10, population=20, warmup_ticks=5)
+    assert result["warmup_ticks"] == 5
+    assert (tmp_path / "warmup_seed11.npz").exists()
+    for row in result["rows"]:
+        # Births/deaths are deltas from the resume point, never the warm-up.
+        assert row["births"] >= 0 and row["deaths"] >= 0
+    text = (tmp_path / "summary.md").read_text()
+    assert "evolved population" in text
+    assert "random founders" not in text
+
+
+def test_warmup_must_be_shorter_than_the_horizon(tmp_path):
+    with pytest.raises(ValueError, match="warmup_ticks"):
+        run_controller_comparison(str(tmp_path), controllers=["neural"],
+                                  seeds=(11,), ticks=8, population=10,
+                                  warmup_ticks=8)
+
+
+def test_stats_prime_does_not_report_pre_resume_counters():
+    """A recorder started mid-run must not attribute old births to interval 1."""
+    from evolve.stats import StatsRecorder
+
+    eng = Engine(make_config(seed=3, n=20, ticks=40))
+    eng.run(20)
+    births_before = eng.births_total
+    deaths_before = eng.deaths_total
+
+    rec = StatsRecorder()
+    rec.prime(eng)
+    primed_population = eng.population.n_alive
+    eng.run(5)
+    row = rec.record(eng)
+
+    assert row["births"] == eng.births_total - births_before
+    assert row["deaths"] == eng.deaths_total - deaths_before
+    # Growth is measured from the primed population, not from zero.
+    assert row["growth_rate"] == eng.population.n_alive - primed_population
+

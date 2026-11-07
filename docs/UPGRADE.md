@@ -292,10 +292,14 @@ The report says exactly that in its own "Interpretation limits" section.
 Three caveats that matter more than the table:
 
 * **The neural arm is the shipped *random* MLP.** Founders use random genomes,
-  so this compares a random network to hand-written reflexes — it is **not**
-  evidence about evolution. The harness supports a warm-up (`evolve_ticks`)
-  condition, documented as a separate, more expensive experiment rather than
-  silently folded in.
+  so this table compares a random network to hand-written reflexes — it is
+  **not** evidence about evolution. The harness now also implements the
+  warm-up condition (`controllers --warmup N`, `warmup_ticks`): the model's own
+  MLP evolves the population for N ticks, that state is snapshotted, and every
+  arm is resumed from the *same* snapshot so only the decision function
+  differs. Births/deaths are then counted from the resume point. It is off by
+  default and the report states which condition ran; no warm-up run is claimed
+  here, because none was executed at design scale.
 * **A controller that survives longer but reproduces less is not "better" by
   definition**, so population and births are reported separately rather than
   combined into one score.
@@ -389,10 +393,10 @@ approximation that changes what is on screen.
 
 ## 10. Test results — **DONE**
 
-`python3 -m pytest tests/ -m "not slow" -o addopts="" -q` → **338 passed
-in 253.42 s** (repeat run: 270.58 s). Suite grew from 196 to 338 tests. No
-existing assertion was weakened or deleted; several were strengthened. The
-notable ones:
+`python3 -m pytest tests/ -o addopts="" -q` → **346 passed in 259.34 s**
+(a run before the last two fixes: 343 passed in 266.55 s). Suite grew from 196
+to 346 tests. No existing assertion was weakened or deleted; several were
+strengthened. The notable ones:
 
 * `tests/test_optimization_equivalence.py` pins the three pre-upgrade checksums.
 * `tests/test_controllers.py` (24) covers the output contract, reproducibility,
@@ -509,7 +513,7 @@ what was added around them.
 | 7. New experiment descriptions | **DONE** (harnesses) / **PARTIAL** (design-scale runs deferred) |
 | 8. Controller comparison results | **DONE** (measured; **underpowered null**) |
 | 9. Visualization changes | **DONE** (overlays, inspector, analytics, ancestry) |
-| 10. Test results | **DONE** (338 passed; 2 real bugs found by tests) |
+| 10. Test results | **DONE** (346 passed; 2 real bugs found by tests) |
 | 11. Known limitations | **DONE** (listed, not hidden) |
 | 12. Deferred improvements | **DEFERRED** (each with a reason) |
 | 13. Updated documentation | **DONE** |

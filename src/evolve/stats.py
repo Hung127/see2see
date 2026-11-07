@@ -153,6 +153,23 @@ class StatsRecorder:
         self._last_tick = 0
         self._seen_hashes: set[bytes] = set()
 
+    def prime(self, engine) -> None:
+        """Adopt ``engine``'s counters as the baseline for the first row.
+
+        Used when the recorder starts *mid-run* (a controller evaluation resumed
+        from a warm-up snapshot). Without this, the first row would report every
+        birth and death since tick 0 as if they happened in the first interval.
+        Population and tick baselines are primed too, so ``growth_rate`` and the
+        per-capita rates describe the evaluation window. No counter on the engine
+        is changed.
+        """
+        self._last_births = int(engine.births_total)
+        self._last_deaths = int(engine.deaths_total)
+        self._last_mutations = int(engine.mutations_total)
+        self._last_population = int(engine.population.n_alive)
+        self._last_tick = int(engine.tick)
+        self._seen_hashes = set()
+
     def record(self, engine) -> dict:
         """Sample one row from the engine and append it to the ring buffer."""
         pop = engine.population
