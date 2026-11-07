@@ -376,6 +376,57 @@ def organism_rows(payload: dict) -> list[tuple[str, str]]:
     ]
 
 
+def lineage_rows(engine, org_id: int, depth: int = 4) -> list[tuple[str, str]]:
+    """Ancestry rows for one organism, from recorded data only.
+
+    Two sources, both real: the population arrays carry the parent IDs recorded
+    at birth, and (when a :class:`~evolve.stats.LineageRecorder` is attached) the
+    recorder can follow the chain further back. A founder has no recorded
+    parents, and a record that has been evicted is reported as unknown — neither
+    is ever invented.
+    """
+    pop = engine.population
+    idx = np.flatnonzero(pop.alive)
+    rows: list[tuple[str, str]] = []
+    if idx.size == 0:
+        return [("lineage", "no living organisms")]
+    hits = np.flatnonzero(pop.id[idx] == int(org_id))
+    if hits.size == 0:
+        return [("lineage", "organism is no longer alive")]
+    i = int(idx[int(hits[0])])
+    pa = int(pop.parent_a[i])
+    pb = int(pop.parent_b[i])
+    if pa < 0 and pb < 0:
+        rows.append(("parents", "none recorded — founder of this run"))
+    elif pb < 0:
+        rows.append(("parent", f"{pa} (asexual)"))
+    else:
+        rows.append(("parents", f"{pa} and {pb}"))
+
+    recorder = getattr(engine, "lineage", None)
+    if recorder is None:
+        rows.append(("ancestry depth", "not recorded in this session"))
+        return rows
+    chain = recorder.ancestry(int(org_id), depth=depth)
+    if not chain or chain[-1] is None:
+        rows.append(("ancestry depth", "not recorded (born before logging)"))
+        return rows
+    # Oldest first: each generation's id, with the unknown link marked as such.
+    parts = []
+    for record in chain:
+        if record is None:
+            parts.append("unknown")
+        else:
+            parts.append(f"{record['org_id']} (gen {record['generation']})")
+    rows.append(("ancestry (oldest first)", " → ".join(parts)))
+    deepest = max((r["generation"] for r in chain if r is not None), default=0)
+    rows.append(("recorded depth", f"{len(chain)} generations · gen {deepest}"))
+    finished = len(getattr(recorder, "finished", ()))
+    rows.append(("records kept", f"{finished} finished · "
+                                 f"{len(recorder.living())} living"))
+    return rows
+
+
 def decision_summary(payload: dict) -> str:
     o = np.asarray(payload.get("outputs", np.zeros(8)), dtype=np.float64)
     bits = []
@@ -556,6 +607,12 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
         p.section("selected organism")
         for label, value in organism_rows(selected):
             p.row(label, value)
+        p.section("ancestry (recorded only)")
+        for label, value in lineage_rows(engine, selected["id"]):
+            p.row(label, value)
+        p.footer_hint("Ancestry comes from parents recorded at birth. Founders "
+                      "have none, and evicted records are shown as unknown, "
+                      "never guessed.")
         if selected.get("has_last_vectors", True):
             p.section("it senses (16 inputs)")
             for label, value in sensor_rows(selected):
@@ -625,9 +682,9 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
 
 CONTROL_LINES = (
     "SPACE pause · S step one tick · 1/2/3/4 speed 1/2/5/20×",
-    "Click an organism to inspect it · X clear · F follow it",
-    "Arrows pan · + / − zoom · HOME reset view · V environment layer",
-    "I show/hide this panel · H big help · R restart from seed · Q quit",
+    "Click an organism to inspect it · X clear · F follow it · P perception",
+    "A analytics charts · arrows pan · + / − zoom · HOME reset view",
+    "V environment layer · I show/hide this panel · H big help · R restart · Q quit",
 )
 
 
@@ -803,14 +860,15 @@ def draw_footer(screen: pygame.Surface, rect: pygame.Rect,
     width = rect.width - 20
     lines = []
     full_keys = ("SPACE pause · S step · 1-4 speed 1/2/5/20× · click inspect "
-                 "· X clear · F follow · I panel · V layer · H help · Q quit")
+                 "· X clear · F follow · P perception · A charts · I panel "
+                 "· V layer · H help · Q quit")
     if small.size(full_keys)[0] <= width:
         lines.append(full_keys)
     else:
         # Narrow window: keep the controls that need no explanation and let the
         # legend drop off, rather than running text under the window edge.
         compact = ("SPACE pause · S step · 1-4 speed · click inspect · X clear "
-                   "· I panel · H help · Q quit")
+                   "· A charts · I panel · H help · Q quit")
         lines.append(compact)
     legend = ("Green = plant · brown = carcass · organism colour = inherited "
               "diet gene · background = environment layer · mass is conserved")
@@ -837,7 +895,9 @@ HELP_BLOCKS = (
         "Green specks are plants, brown lumps are carcasses, and each coloured "
         "dot is an animal. The shaded background is one environmental layer, and "
         "the top-left badge names it and explains its colours; V cycles through "
-        "climate, moisture, soil, temperature and terrain.",
+        "climate, moisture, soil, temperature, terrain, plant biomass, animal "
+        "counts and pheromone. The badge prints the numeric range of whatever "
+        "layer is showing.",
         "Mass is conserved: plants and animals are built from soil nutrients, and "
         "everything that dies decays back into soil. The side panel lists the "
         "pools so you can watch matter move between them.",
@@ -901,7 +961,25 @@ HELP_BLOCKS = (
         "and the panel names that colour so you can find the affected patch.",
         "Keys: SPACE pause · S one tick · 1/2/3/4 speed 1/2/5/20× · arrows pan · "
         "+/− zoom · HOME reset view · click inspect · X clear · F follow · "
-        "I panel · V layer · H this guide · R restart · Q quit.",
+        "P perception · A analytics · I panel · V layer · H this guide · R "
+        "restart · Q quit.",
+    )),
+    ("Charts, perception and ancestry", (
+        "A opens the analytics view: population, births and deaths, biomass "
+        "pools, mean traits, genetic diversity, environment, generation depth, "
+        "deaths by cause and the age-at-death histogram, all measured from the "
+        "running simulation and sampled every few ticks. Every chart prints its "
+        "unit and its numeric scale. Mouse wheel scrolls the grid; A returns to "
+        "the world. Charts with no samples say so rather than drawing a flat line.",
+        "P toggles the perception overlay for the selected animal: the vision "
+        "cone and a marker on each target its network actually reported this "
+        "tick, reconstructed from the sensor vector itself. A class reported as "
+        "'nothing detected' draws no marker, so the overlay cannot show food "
+        "where the network saw none.",
+        "The inspector lists ancestry from parents recorded at birth and, when "
+        "the run logs lineage, the recorded chain further back. Founders have no "
+        "recorded parents and evicted records are shown as unknown — ancestry is "
+        "never guessed from genome similarity or ID order.",
     )),
 )
 

@@ -40,7 +40,10 @@ def draw_world(engine: Engine, screen: pygame.Surface, camera: Camera,
             color = layer_color(layer, float(fields.temperature[ix, iy]),
                                 float(fields.moisture[ix, iy]),
                                 float(fields.soil[ix, iy]),
-                                float(fields.terrain[ix, iy]))
+                                float(fields.terrain[ix, iy]),
+                                plant_density=float(fields.plant_density[ix, iy]),
+                                organism_density=float(fields.organism_density[ix, iy]),
+                                pheromone=float(fields.pheromone[ix, iy]))
             x0, y0 = camera.to_screen(ix * cell, iy * cell)
             x1, y1 = camera.to_screen((ix + 1) * cell, (iy + 1) * cell)
             pygame.draw.rect(screen, color, (x0, y0, x1 - x0 + 1, y1 - y0 + 1))
@@ -166,6 +169,75 @@ def draw_selection(engine: Engine, screen: pygame.Surface, camera: Camera,
         back = (tip[0] - np.cos(h + side) * 6.0,
                 tip[1] - np.sin(h + side) * 6.0)
         pygame.draw.line(screen, SELECTION, tip, back, 2)
+
+
+def draw_perception(engine: Engine, screen: pygame.Surface, camera: Camera,
+                    payload: dict | None) -> None:
+    """Vision cone and the targets the network actually detected this tick.
+
+    The geometry is *reconstructed from the sensor vector*, not re-run against
+    the world: closeness ``c`` is ``1 - d/r`` and bearing ``b`` is ``θ/π``, so
+    the inverse is exact for the nearest visible target of each class. That
+    means the marks cannot disagree with what the network saw, and a class with
+    the "nothing detected" code (−1) draws no mark at all rather than a mark at
+    distance zero.
+
+    Nothing here is a second perception model: if the sensor vector is missing
+    (an organism born after the last think step) the overlay draws only the
+    cone and says nothing about targets.
+    """
+    if payload is None:
+        return
+    phen = np.asarray(payload.get("phenotypes", np.zeros(12)), dtype=np.float64)
+    if phen.size < 4:
+        return
+    x, y = payload.get("position", (0.0, 0.0))
+    heading = float(payload.get("heading", 0.0))
+    rvis = float(phen[2])
+    half = np.deg2rad(float(phen[3])) / 2.0
+    sx, sy = camera.to_screen(x, y)
+    px_radius = camera.scale(rvis)
+    if px_radius < 2:
+        return
+    # Cone as a faint polyline: three points plus the apex reads as a wedge
+    # without filling the world with a translucent shape.
+    colour = (120, 180, 240)
+    steps = 12
+    points = [(sx, sy)]
+    for k in range(steps + 1):
+        ang = heading - half + (2.0 * half) * k / steps
+        points.append((int(sx + np.cos(ang) * px_radius),
+                       int(sy + np.sin(ang) * px_radius)))
+    pygame.draw.lines(screen, colour, False, points, 1)
+
+    if not payload.get("has_last_vectors", False):
+        return
+    sensors = np.asarray(payload.get("sensors", np.zeros(16)), dtype=np.float64)
+    # (closeness index, bearing index, label, colour). Bearing index is the
+    # channel immediately after closeness except for the mate channel (6 has no
+    # bearing channel of its own; 7 is own energy).
+    classes = ((0, 1, "food", (126, 226, 136)),
+               (2, 3, "threat", (236, 96, 88)),
+               (4, 5, "prey", (245, 194, 92)),
+               (6, None, "mate", (232, 128, 220)))
+    for close_i, bearing_i, _label, colour in classes:
+        closeness = float(sensors[close_i]) if close_i < sensors.size else -1.0
+        if closeness <= -0.999:
+            continue                       # "nothing detected", not "at zero"
+        dist = max(0.0, (1.0 - closeness)) * rvis
+        bearing = 0.0
+        if bearing_i is not None and bearing_i < sensors.size:
+            bearing = float(sensors[bearing_i]) * np.pi
+        ang = heading + bearing
+        tx = int(sx + np.cos(ang) * camera.scale(dist))
+        ty = int(sy + np.sin(ang) * camera.scale(dist))
+        # A dashed tick plus a hollow ring: the plant/carcass markers are
+        # filled, so a detection mark cannot be confused with an entity.
+        pygame.draw.circle(screen, colour, (tx, ty), 5, 1)
+        pygame.draw.line(screen, colour, (tx - 7, ty), (tx - 2, ty), 1)
+        pygame.draw.line(screen, colour, (tx + 2, ty), (tx + 7, ty), 1)
+        pygame.draw.line(screen, colour, (tx, ty - 7), (tx, ty - 2), 1)
+        pygame.draw.line(screen, colour, (tx, ty + 2), (tx, ty + 7), 1)
 
 
 def draw(engine: Engine, screen: pygame.Surface, camera: Camera,

@@ -16,13 +16,16 @@ import pygame
 
 from ..config import Config
 from ..engine import Engine
+from .analytics import AnalyticsHistory, draw_analytics
 from .camera import Camera
-from .palette import LAYER_LABELS, next_layer
+from .palette import (
+    LAYER_LABELS, layer_ramp, layer_scale_text, next_layer,
+)
 from .panels import (
     FOOTER_H, MIN_WORLD_W, PANEL_W, SCROLL_STEP, TextCache, draw_footer,
     draw_help, draw_sidebar,
 )
-from .render import draw_selection, draw_world
+from .render import draw_perception, draw_selection, draw_world
 
 _SPEEDS = {pygame.K_1: 1, pygame.K_2: 2, pygame.K_3: 5, pygame.K_4: 20}
 _DEFAULT_SIZE = (1400, 860)
@@ -49,6 +52,14 @@ class ViewState:
         self.selected_gone = False
         self.inspect_tick: int = -1
         self.history: list[tuple[int, int]] = []
+        # Analytics view: a separate full-width screen that reads the same
+        # simulation. It is a presentation mode, not a second simulation.
+        self.show_analytics = False
+        self.analytics_scroll = 0
+        self.analytics_height = 0
+        self.analytics_view = 0
+        # Draw the selected organism's vision cone and detected targets.
+        self.show_perception = True
 
 
 class VizApp:
@@ -67,6 +78,11 @@ class VizApp:
         self.fonts = self._make_fonts()
         self.cache = TextCache()
         self.camera = self._new_camera()
+        # Live analytics history: sampled on simulated time, bounded in size.
+        self.analytics = AnalyticsHistory()
+        # Seed the first sample so the analytics view is never blank on the
+        # very first frame, before a single tick has run.
+        self.analytics.maybe_sample(engine, force=True)
 
     # -- layout ---------------------------------------------------------------
     def _make_fonts(self) -> dict[str, pygame.font.Font]:
@@ -83,17 +99,33 @@ class VizApp:
         }
 
     def _panel_rect(self) -> pygame.Rect:
-        if not self.state.show_panel:
+        if not self.state.show_panel or self.state.show_analytics:
             return pygame.Rect(self.size[0], 0, 0, self.size[1])
         return pygame.Rect(self.size[0] - PANEL_W, 0, PANEL_W,
                            self.size[1] - FOOTER_H)
 
     def _world_rect(self) -> pygame.Rect:
+        if self.state.show_analytics:
+            return pygame.Rect(0, 0, 0, 0)   # analytics replaces the world view
+        w = self.size[0] - (PANEL_W if self.state.show_panel else 0)
+        return pygame.Rect(0, 0, w, self.size[1] - FOOTER_H)
+
+    def _analytics_rect(self) -> pygame.Rect:
+        return pygame.Rect(0, 0, self.size[0], self.size[1] - FOOTER_H)
+
+    def _camera_rect(self) -> pygame.Rect:
+        """World viewport used for camera geometry, ignoring the analytics mode.
+
+        The camera keeps its zoom and focus while the analytics view is open, so
+        leaving that view does not silently re-fit or crop the world. Using
+        ``_world_rect`` here would build a zero-sized camera when analytics was
+        toggled on (and ``R`` can restart the run while it is open).
+        """
         w = self.size[0] - (PANEL_W if self.state.show_panel else 0)
         return pygame.Rect(0, 0, w, self.size[1] - FOOTER_H)
 
     def _new_camera(self) -> Camera:
-        rect = self._world_rect()
+        rect = self._camera_rect()
         cam = Camera((self.engine.world.width, self.engine.world.height),
                      (rect.w, rect.h))
         cam.fit()
@@ -148,6 +180,8 @@ class VizApp:
             # The old samples belong to the previous run: keeping them made the
             # sparkline claim "was 24, now 120" across two different worlds.
             state.history.clear()
+            self.analytics.reset()
+            self.analytics.maybe_sample(self.engine, force=True)
             state.scroll = 0
             state.follow = False
             self.camera = self._new_camera()
@@ -174,6 +208,12 @@ class VizApp:
             self.camera.fit()
         elif key == pygame.K_v:
             state.layer = next_layer(state.layer)
+        elif key == pygame.K_a:
+            state.show_analytics = not state.show_analytics
+            if not state.show_analytics:
+                self.camera = self._resize_camera()
+        elif key == pygame.K_p:
+            state.show_perception = not state.show_perception
         elif key == pygame.K_i:
             state.show_panel = not state.show_panel
             self.camera = self._resize_camera()
@@ -265,6 +305,10 @@ class VizApp:
                     self.state.help_scroll = max(
                         0, self.state.help_scroll
                         - event.y * SCROLL_STEP)
+                elif self.state.show_analytics:
+                    self.state.analytics_scroll = max(
+                        0, self.state.analytics_scroll
+                        - event.y * SCROLL_STEP)
                 elif self._panel_rect().collidepoint(pos):
                     self.state.scroll = max(
                         0, self.state.scroll - event.y * SCROLL_STEP)
@@ -286,7 +330,7 @@ class VizApp:
         carrying it over silently cropped the world when the window shrank.
         A zoom or focus the user chose is preserved.
         """
-        rect = self._world_rect()
+        rect = self._camera_rect()
         old = self.camera
         cam = Camera((self.engine.world.width, self.engine.world.height),
                      (rect.w, rect.h))
@@ -312,6 +356,9 @@ class VizApp:
         # also moves the population line: otherwise the world advanced and the
         # chart did not, which looks like the sparkline is broken.
         self._record_history()
+        # Analytics is sampled on simulated time, not frames, so the x axis
+        # means ticks even when the reader changes speed.
+        self.analytics.maybe_sample(self.engine)
         self.render()
         pygame.display.flip()
         self.clock.tick(60)
@@ -327,48 +374,87 @@ class VizApp:
             del hist[:len(hist) - cap]
 
     def render(self) -> None:
-        rect = self._world_rect()
-        self.screen.set_clip(rect)
-        draw_world(self.engine, self.screen, self.camera, layer=self.state.layer)
-        draw_selection(self.engine, self.screen, self.camera,
-                       self.state.selected_id)
-        self.screen.set_clip(None)
-        if self.state.show_panel:
-            draw_sidebar(self.screen, self._panel_rect(), self.fonts, self.cache,
-                         self.engine, self.state)
+        if self.state.show_analytics:
+            self._render_analytics()
+        else:
+            self._render_world()
         draw_footer(self.screen, pygame.Rect(0, self.size[1] - FOOTER_H,
                                              self.size[0], FOOTER_H),
                     self.fonts, self.cache, self.state)
-        self._draw_badges(rect)
         if self.state.show_help:
             self.state.help_height = draw_help(
                 self.screen, pygame.Rect(0, 0, self.size[0], self.size[1]),
                 self.fonts, self.cache, self.state.help_scroll,
                 self.state.help_height)
 
+    def _render_world(self) -> None:
+        rect = self._world_rect()
+        self.screen.set_clip(rect)
+        draw_world(self.engine, self.screen, self.camera, layer=self.state.layer)
+        draw_selection(self.engine, self.screen, self.camera,
+                       self.state.selected_id)
+        # Perception overlay sits above the entity it belongs to but below the
+        # sidebar: it is an annotation about one animal, not a world layer.
+        if self.state.show_perception and self.state.selected is not None:
+            draw_perception(self.engine, self.screen, self.camera,
+                            self.state.selected)
+        self.screen.set_clip(None)
+        if self.state.show_panel:
+            draw_sidebar(self.screen, self._panel_rect(), self.fonts, self.cache,
+                         self.engine, self.state)
+        self._draw_badges(rect)
+
+    def _render_analytics(self) -> None:
+        rect = self._analytics_rect()
+        content, view = draw_analytics(
+            self.screen, rect, self.fonts, self.cache, self.analytics,
+            self.engine, self.state.analytics_scroll)
+        self.state.analytics_height = content
+        self.state.analytics_view = view
+        max_scroll = max(0, content - view)
+        self.state.analytics_scroll = max(
+            0, min(self.state.analytics_scroll, max_scroll))
+
     def _draw_badges(self, rect: pygame.Rect) -> None:
         """Top-left status strip: tick, and what the background layer means.
 
         Fitted to the world viewport: with the panel open on a narrow window the
         strip would otherwise run under the sidebar and collide with its title.
+        Single-quantity layers also get a ramp legend with the numeric range
+        printed beside it, so the colour scale is stated, not implied.
         """
         small = self.fonts["small"]
         layer = self.state.layer
         avail = max(120, rect.width - 16)
-        lines = [
-            (f"tick {self.engine.tick:,}  ·  {layer} layer", (226, 230, 238)),
-            (LAYER_LABELS.get(layer, layer), (148, 156, 170)),
-        ]
-        surfaces = [self.cache.fit(small, text, color, avail - 10)
-                    for text, color in lines]
+        surfaces = [self.cache.fit(small, f"tick {self.engine.tick:,}  ·  "
+                                          f"{layer} layer", (226, 230, 238),
+                                   avail - 10),
+                    self.cache.fit(small, LAYER_LABELS.get(layer, layer),
+                                   (148, 156, 170), avail - 10)]
+        scale = layer_scale_text(layer)
+        ramp = layer_ramp(layer, steps=48)
+        if scale:
+            surfaces.append(self.cache.fit(small, scale, (104, 112, 126),
+                                           avail - 10))
         pad = 5
         width = max(s.get_width() for s in surfaces) + 2 * pad
-        height = sum(s.get_height() for s in surfaces) + 2 * pad
+        if ramp:
+            width = max(width, min(avail, 220) + 2 * pad)
+        height = (sum(s.get_height() for s in surfaces) + 2 * pad
+                  + (10 if ramp else 0))
         self.screen.fill((14, 16, 20), (6, 6, width, height))
         y = 6 + pad
         for surf in surfaces:
             self.screen.blit(surf, (6 + pad, y))
             y += surf.get_height()
+        if ramp:
+            bar = min(avail - 10, 200)
+            y += 2
+            for i, colour in enumerate(ramp):
+                x0 = 6 + pad + int(bar * i / len(ramp))
+                x1 = 6 + pad + int(bar * (i + 1) / len(ramp))
+                pygame.draw.rect(self.screen, colour, (x0, y, max(1, x1 - x0), 8))
+            y += 8
         if self.engine.population.n_alive == 0:
             self._draw_extinct(rect)
         if self.state.selected_gone and not self.state.show_panel:

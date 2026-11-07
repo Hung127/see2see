@@ -337,6 +337,45 @@ class LineageRecorder:
         """Records for organisms still alive, ascending by ID."""
         return [self._living[k] for k in sorted(self._living)]
 
+    def record(self, org_id: int) -> dict | None:
+        """The record for one organism, alive or recently dead, else ``None``.
+
+        ``None`` is the honest answer for a founder (never born in a tick) or for
+        a record that has been evicted; callers must show it as unknown rather
+        than inventing a parent.
+        """
+        row = self._living.get(int(org_id))
+        if row is not None:
+            return row
+        for row in self.finished:
+            if row["org_id"] == int(org_id):
+                return row
+        return None
+
+    def ancestry(self, org_id: int, depth: int = 4) -> list[dict | None]:
+        """Chain of records from the oldest known ancestor to ``org_id``.
+
+        Each element is a record or ``None`` where the chain is genuinely
+        unknown (founder, or evicted record). The newest entry is always the
+        requested organism. No link is ever inferred from position, genome
+        similarity or ID ordering.
+        """
+        chain: list[dict | None] = [self.record(org_id)]
+        current = chain[0]
+        for _ in range(max(0, int(depth)) - 1):
+            if current is None:
+                break
+            parent = current.get("parent_a")
+            if parent is None:
+                break
+            parent_row = self.record(int(parent))
+            chain.append(parent_row)
+            if parent_row is None:
+                break
+            current = parent_row
+        chain.reverse()
+        return chain
+
     def rows(self) -> list[dict]:
         """Finished records (oldest first), suitable for ``lineage.csv``."""
         return list(self.finished)

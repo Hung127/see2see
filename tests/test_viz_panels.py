@@ -54,11 +54,27 @@ def test_next_layer_cycles_and_recovers():
 
 
 def test_layer_colors_are_bounded_and_distinct():
+    """Every layer must produce valid colours *and* respond to its quantity.
+
+    The overlays added in the upgrade visualise plant biomass, animal counts and
+    pheromone, not the five climate fields, so a test that only varied climate
+    would pass them by without checking anything. Both extremes are therefore
+    set for every quantity: a layer that reads temperature, soil, moisture,
+    terrain or one of the three overlays sees a different value at each end.
+    """
+    def at(low: bool):
+        # low/high for every quantity a layer might read.
+        v = 0.0 if low else 1.0
+        return dict(temperature=-30.0 + 90.0 * v, moisture=v,
+                    soil=6.0 * v, terrain=v,
+                    plant_density=10.0 * v, organism_density=10.0 * v,
+                    pheromone=v)
+
     for name in palette.LAYERS:
-        cs = [palette.layer_color(name, t, m, s, h)
-              for t, m, s, h in ((-30.0, 0.0, 0.0, 0.0),
-                                 (20.0, 0.5, 3.0, 0.5),
-                                 (60.0, 1.0, 6.0, 1.0))]
+        lo, hi = at(True), at(False)
+        cs = [palette.layer_color(name, **lo),
+              palette.layer_color(name, **at(True)),
+              palette.layer_color(name, **hi)]
         for c in cs:
             assert len(c) == 3
             assert all(isinstance(v, int) and 0 <= v <= 255 for v in c), (name, c)
@@ -630,3 +646,121 @@ def test_selection_survives_compaction_by_id():
         if app.state.selected is None:
             break       # it died; covered by the other test
         assert app.state.selected["id"] == chosen
+
+
+# -- ancestry panel ----------------------------------------------------------
+def test_lineage_rows_report_a_founder_without_inventing_parents():
+    eng = Engine(small_config(organisms=8, seed=3))
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    # Point at an organism whose parent slots are the founder sentinel.
+    founder = int(idx[0])
+    pop.parent_a[founder] = -1
+    pop.parent_b[founder] = -1
+    oid = int(pop.id[founder])
+    rows = dict(panels.lineage_rows(eng, oid))
+    assert "founder" in rows["parents"]
+    assert "not recorded" in rows["ancestry depth"]
+    # No recorder attached: nothing may claim an ancestry chain.
+    assert not any("→" in value for value in rows.values())
+
+
+def test_lineage_rows_follow_a_recorded_chain():
+    from evolve.stats import LineageRecorder
+
+    eng = Engine(small_config(organisms=8, seed=3))
+    eng.lineage = LineageRecorder()
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    child = int(idx[0])
+    oid = int(pop.id[child])
+    # The population arrays are what the engine writes at birth; the recorder
+    # holds the same parentage plus the chain further back. Both are real.
+    pop.parent_a[child] = 100
+    pop.parent_b[child] = 101
+    eng.lineage.record_birth(oid, 100, 101, tick=1, generation=2)
+    eng.lineage.record_birth(100, 50, None, tick=0, generation=1)
+    # 50 is the recorded founder of this chain, so the walk can reach it.
+    eng.lineage.record_birth(50, None, None, tick=0, generation=0)
+    rows = dict(panels.lineage_rows(eng, oid))
+    assert "100 and 101" in rows["parents"]
+    chain = rows["ancestry (oldest first)"]
+    assert "50 (gen 0)" in chain and f"{oid} (gen 2)" in chain
+    # Oldest first: 50 is the recorded founder, so it leads the chain.
+    assert chain.startswith("50 (gen 0)")
+    assert "living" in rows["records kept"]
+
+
+def test_lineage_rows_are_honest_about_a_dead_organism():
+    eng = Engine(small_config(organisms=8))
+    rows = dict(panels.lineage_rows(eng, 999_999))
+    assert "no longer alive" in rows["lineage"]
+
+
+# -- perception overlay ------------------------------------------------------
+def _perception_payload(sensors, rvis=100.0, angle=120.0, has_vectors=True):
+    phen = np.zeros(12)
+    phen[2] = rvis
+    phen[3] = angle
+    return {
+        "phenotypes": phen,
+        "position": (250.0, 250.0),
+        "heading": 0.0,
+        "has_last_vectors": has_vectors,
+        "sensors": np.asarray(sensors, dtype=np.float64),
+    }
+
+
+def _count_colour(surf, colour):
+    arr = pygame.surfarray.array3d(surf)
+    return int((arr == colour).all(axis=2).sum())
+
+
+def test_perception_draws_no_marker_for_a_nothing_detected_channel():
+    """−1 means 'nothing seen'; it must not become a marker at distance zero."""
+    from evolve.viz import render
+
+    cam = Camera((500.0, 500.0), (400, 400))
+    surf = pygame.Surface((400, 400))
+    surf.fill((0, 0, 0))
+    sensors = np.full(16, -1.0)
+    render.draw_perception(None, surf, cam, _perception_payload(sensors))
+    # The cone is drawn in its own colour; none of the class colours appear.
+    for colour in ((126, 226, 136), (236, 96, 88),
+                   (245, 194, 92), (232, 128, 220)):
+        assert _count_colour(surf, colour) == 0
+
+
+def test_perception_marker_sits_where_the_sensor_vector_says():
+    from evolve.viz import render
+
+    cam = Camera((500.0, 500.0), (400, 400))
+    surf = pygame.Surface((400, 400))
+    surf.fill((0, 0, 0))
+    sensors = np.full(16, -1.0)
+    sensors[0], sensors[1] = 0.5, 0.0     # food at half the vision range, ahead
+    render.draw_perception(None, surf, cam, _perception_payload(sensors))
+    food = (126, 226, 136)
+    assert _count_colour(surf, food) > 0
+    # Independent geometry: closeness 0.5 of r=100 is 50 u ahead of the animal.
+    sx, sy = cam.to_screen(250.0, 250.0)
+    arr = pygame.surfarray.array3d(surf)
+    hits = (arr == food).all(axis=2)
+    xs = np.flatnonzero(hits.any(axis=1))
+    ys = np.flatnonzero(hits.any(axis=0))
+    assert abs(int(xs.mean()) - (sx + 50)) <= 3
+    assert abs(int(ys.mean()) - sy) <= 3
+
+
+def test_perception_without_vectors_draws_only_the_cone():
+    from evolve.viz import render
+
+    cam = Camera((500.0, 500.0), (400, 400))
+    surf = pygame.Surface((400, 400))
+    surf.fill((0, 0, 0))
+    sensors = np.zeros(16)
+    sensors[0] = 0.5
+    render.draw_perception(None, surf, cam,
+                           _perception_payload(sensors, has_vectors=False))
+    assert _count_colour(surf, (126, 226, 136)) == 0
+    assert _count_colour(surf, (120, 180, 240)) > 0      # the cone itself
