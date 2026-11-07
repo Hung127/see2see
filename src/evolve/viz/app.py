@@ -578,8 +578,25 @@ class VizApp:
         pygame.image.save(self.screen, path)
 
 
+def make_app(config: Config, speed: int = 1) -> VizApp:
+    """Build the viewer for ``config``, with lineage logging attached.
+
+    The recorder is observation only — a test asserts the checksum is identical
+    with and without it — and it is bounded on both sides (living records are
+    capped by population capacity, finished records by ``max_finished``), so a
+    long viewer session cannot grow memory without limit. Without it the
+    ancestry view could show only the parent ids stored on the living
+    population and would have to say that the chain is unavailable.
+    """
+    from ..stats import LineageRecorder
+
+    engine = Engine(config)
+    engine.lineage = LineageRecorder()
+    return VizApp(engine, speed=speed)
+
+
 def launch(config: Config) -> None:
-    app = VizApp(Engine(config))
+    app = make_app(config)
     # Open the guide once, before anything moves: a first-time user has no way
     # to know what the dots mean, and the guide is modal so nothing happens
     # behind their back while they read it. H or Escape closes it.

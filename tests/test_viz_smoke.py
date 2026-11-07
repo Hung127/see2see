@@ -64,3 +64,35 @@ def test_camera_maps_world_to_screen():
     assert (sx, sy) == (125, 125)  # centre stays centred
     sx, sy = cam.to_screen(0.0, 0.0)
     assert (sx, sy) == (125 - 500, 125 - 500)  # zoomed out from centre
+
+
+def test_launched_viewer_has_lineage_logging():
+    """`viz` must attach the recorder the ancestry view claims to read.
+
+    The view's own text says logging is on in the viewer. A wiring change that
+    dropped the recorder would leave that sentence untrue, so the claim is
+    tested rather than assumed.
+    """
+    from evolve.viz.app import make_app
+
+    app = make_app(small_config())
+    assert app.engine.lineage is not None
+    assert app.engine.lineage.record(1) is None   # nothing fabricated up front
+    app.run_frame()
+    assert app.engine.tick == 1
+
+
+def test_lineage_view_does_not_change_the_checksum():
+    """Attaching the viewer's recorder must leave the run bit-identical."""
+    from evolve.viz.app import make_app
+
+    plain = Engine(small_config())
+    for _ in range(40):
+        plain.step()
+
+    app = make_app(small_config(), speed=1)
+    for _ in range(40):
+        app.run_frame()
+
+    assert app.engine.tick == plain.tick
+    assert app.engine.checksum() == plain.checksum()
