@@ -692,7 +692,7 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
 CONTROL_LINES = (
     "SPACE pause · S step one tick · 1/2/3/4 speed 1/2/5/20×",
     "Click an organism to inspect it · X clear · F follow it · P perception",
-    "A analytics charts · arrows pan · + / − zoom · HOME reset view",
+    "A analytics charts · G ancestry · arrows pan · + / − zoom · HOME reset",
     "V environment layer · I show/hide this panel · H big help · R restart · Q quit",
 )
 
