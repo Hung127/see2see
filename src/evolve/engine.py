@@ -84,6 +84,10 @@ class Engine:
         # Optional bounded ancestry log (see stats.LineageRecorder). ``None`` by
         # default so the tick pays nothing unless a caller asks for lineage.
         self.lineage = None
+        # Optional non-neural controller (see controllers.py). ``None`` means the
+        # evolved MLP decides, which is the default and the only mode the model
+        # itself uses; baselines exist for evaluation runs only.
+        self.controller = None
         self.last_sensors = np.zeros((0, 16))
         self.last_outputs = np.zeros((0, 8))
         self.last_sensor_ids = np.zeros(0, dtype=np.int64)
@@ -252,9 +256,16 @@ class Engine:
         # Row identity: slots are compacted and reordered *after* thinking, so
         # keeping the ids lets the inspector map a vector to the right organism.
         self.last_sensor_ids = self.population.id[self.population.alive].copy()
-        weights = self.population.genome[:, N_TRAITS:]
-        self.last_outputs = forward(self.last_sensors, weights)
         self._phen = phenotype(self.population.genome)
+        if self.controller is None:
+            # Default path: the evolved MLP. Kept as the direct call so a default
+            # run is the same computation it was before controllers existed.
+            weights = self.population.genome[:, N_TRAITS:]
+            self.last_outputs = forward(self.last_sensors, weights)
+        else:
+            self.last_outputs = np.asarray(
+                self.controller.act(self.last_sensors, self._phen),
+                dtype=np.float64)
         return decode(self.last_outputs, self._phen)
 
     # -- stage 8: movement ----------------------------------------------------

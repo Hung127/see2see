@@ -107,6 +107,21 @@ def _parser() -> argparse.ArgumentParser:
     exp.add_argument("--arena-ticks", type=int, default=None,
                      help="assay arena horizon (default: 500 x scale)")
     exp.set_defaults(func=_cmd_experiments)
+
+    ctl = sub.add_parser(
+        "controllers", help="compare the controller baselines (opt-in evaluation)")
+    ctl.add_argument("--out", required=True, help="output directory")
+    ctl.add_argument("--seeds", type=int, nargs="+", default=[11, 12, 13],
+                     help="paired seeds (one run per controller per seed)")
+    ctl.add_argument("--ticks", type=int, default=None,
+                     help="override the config horizon")
+    ctl.add_argument("--population", type=int, default=None,
+                     help="override the founder population")
+    ctl.add_argument("--config", default=None,
+                     help="base configuration (default: configs/default.yaml)")
+    ctl.add_argument("--only", nargs="+", default=None,
+                     help="controllers to run (default: all)")
+    ctl.set_defaults(func=_cmd_controllers)
     return p
 
 
@@ -281,6 +296,23 @@ def _cmd_experiments(args) -> int:
     print(f"experiment {experiment_id}: {result['ticks']} ticks, final "
           f"population {result['final_population']}, "
           f"extinct = {result['extinct']} -> {args.out}")
+    return 0
+
+
+def _cmd_controllers(args) -> int:
+    from .controller_eval import run_controller_comparison
+
+    summary = run_controller_comparison(
+        args.out, controllers=args.only, seeds=args.seeds,
+        ticks=args.ticks, config_path=args.config,
+        population=args.population)
+    print(f"controller comparison: {len(summary['rows'])} runs, "
+          f"{summary['ticks']} ticks, seeds {summary['seeds']} -> {args.out}")
+    for r in summary["rows"]:
+        print(f"  {r['controller']:8s} seed {r['seed']:>3d}: final population "
+              f"{r['final_population']:4d}, births {r['births']:4d}, "
+              f"deaths {r['deaths']:4d}"
+              f"{' [EXTINCT]' if r['extinct'] else ''}")
     return 0
 
 
