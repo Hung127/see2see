@@ -636,17 +636,19 @@ def _draw_sparkline(p: Panel, history: list[tuple[int, int]],
                     color: tuple[int, int, int]) -> None:
     """Population line over the recent frames; labelled in words, no axes.
 
-    Needs a few samples before a line means anything, so it says so instead of
-    drawing a meaningless box.
+    With one or two samples a line means nothing, so the box is skipped and the
+    current count is shown instead: the reader gets a fact, not an empty chart.
     """
-    if len(history) < 8:
-        p.text("collecting samples…", TEXT_FAINT, "small")
-        return
     height = 58
     width = p.rect.width - 2 * p._pad
     x0 = p.rect.x + p._pad
     y0 = p.y
     values = [v for _, v in history]
+    if len(values) < 3:
+        now = values[-1] if values else 0
+        p.text(f"{now} right now", TEXT_DIM, "small")
+        p.text("a line appears after a few frames", TEXT_FAINT, "small")
+        return
     first, last = values[0], values[-1]
     peak = max(1, max(values))
     n = len(values)

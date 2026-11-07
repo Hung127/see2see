@@ -403,6 +403,21 @@ def test_help_and_panel_scroll_one_step_per_notch():
     assert app.state.scroll == 8 * panels.SCROLL_STEP
 
 
+def test_sparkline_states_a_fact_before_it_can_draw_a_line():
+    """One sample must read as a number, not as an empty chart."""
+    screen = pygame.Surface((200, 200))
+    cache = panels.TextCache()
+    box = pygame.Rect(0, 0, 180, 120)
+    p = panels.Panel(screen, box, {"small": _FONT, "body": _FONT,
+                                   "title": _FONT, "big": _FONT}, cache)
+    panels._draw_sparkline(p, [(10, 7)], (96, 178, 245))
+    assert p.y > box.y                       # it wrote something
+    # Three samples are enough for a line; the panel advances past the box.
+    p2 = panels.Panel(screen, box, p.fonts, cache)
+    panels._draw_sparkline(p2, [(1, 5), (2, 6), (3, 7)], (96, 178, 245))
+    assert p2.y >= box.y + 58
+
+
 def test_selection_survives_compaction_by_id():
     """The inspector must follow an id, not a slot index."""
     from evolve.viz.app import VizApp
