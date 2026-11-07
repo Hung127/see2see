@@ -666,8 +666,14 @@ class Engine:
         if self.lineage is not None:
             # Only new ids are recorded; the founders were never born in a tick,
             # so they have no record and are honestly absent rather than invented.
+            # The phenotype is passed alongside the record so the ancestry view
+            # can show real trait changes along a chain; it is captured at birth
+            # and never re-derived from a later state.
             self.lineage.record_birth(int(pop.id[slot]), parents[0], parents[1],
-                                      self.tick, generation)
+                                      self.tick, generation,
+                                      traits=(float(child_phen[0]),
+                                              float(child_phen[1]),
+                                              float(child_phen[2])))
         bix, biy = self.fields.cell_index(np.array([pop.x[parent]]),
                                           np.array([pop.y[parent]]))
         np.add.at(self.fields.soil, (bix, biy), waste)

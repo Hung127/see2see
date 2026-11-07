@@ -308,9 +308,16 @@ class LineageRecorder:
         self.finished: deque[dict] = deque(maxlen=int(max_finished))
         self.births_recorded = 0
         self.deaths_recorded = 0
+        # Phenotype snapshot at birth, kept *outside* the record dict so the
+        # record keeps exactly the CSV schema (`LINEAGE_COLUMNS`). Traits are
+        # what the ancestry view needs to show trait changes along a chain, and
+        # they are bounded the same way as the records themselves: one tuple per
+        # living organism, plus one per finished record still in the deque.
+        self._traits: dict[int, tuple[float, float, float]] = {}
 
     def record_birth(self, org_id: int, parent_a: int | None,
-                     parent_b: int | None, tick: int, generation: int) -> None:
+                     parent_b: int | None, tick: int, generation: int,
+                     traits: tuple[float, float, float] | None = None) -> None:
         self._living[int(org_id)] = {
             "org_id": int(org_id),
             "parent_a": parent_a,
@@ -319,19 +326,45 @@ class LineageRecorder:
             "death_tick": None,
             "generation": int(generation),
             "cause": None,
-            "age_at_death": None,
         }
+        if traits is not None:
+            self._traits[int(org_id)] = (float(traits[0]), float(traits[1]),
+                                         float(traits[2]))
         self.births_recorded += 1
 
     def record_death(self, org_id: int, tick: int, cause: str, age: int) -> None:
+        """Finish a record.
+
+        ``age`` is accepted because the engine already has it at the call site,
+        but it is not stored: the record keeps exactly :data:`LINEAGE_COLUMNS`
+        (and the ``lineage`` table's columns), and the age is ``death_tick -
+        birth_tick`` for every record that was logged at birth. Writing a
+        second copy under a name the schema does not declare is what made the
+        record dict and ``LINEAGE_COLUMNS`` disagree.
+        """
+        del age  # derivable from the two ticks; not part of the schema
         record = self._living.pop(int(org_id), None)
         if record is None:
             return  # born before the recorder was attached: no fabricated row
         record["death_tick"] = int(tick)
         record["cause"] = str(cause)
-        record["age_at_death"] = int(age)
+        # Keep the oldest record's traits only while its record survives; when
+        # the bounded deque drops a record, its traits go with it, so the traits
+        # map cannot grow past the records it describes.
+        if len(self.finished) == self.finished.maxlen:
+            evicted = self.finished[0]
+            self._traits.pop(int(evicted["org_id"]), None)
         self.finished.append(record)
         self.deaths_recorded += 1
+
+    def traits(self, org_id: int) -> tuple[float, float, float] | None:
+        """Phenotype ``(body, max speed, vision)`` recorded at birth, or ``None``.
+
+        ``None`` means "not recorded" (a founder, an evicted record, or a run
+        where the recorder was attached after this organism was born). Callers
+        must show that as unknown rather than substituting current values.
+        """
+        return self._traits.get(int(org_id))
 
     def living(self) -> list[dict]:
         """Records for organisms still alive, ascending by ID."""
