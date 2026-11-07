@@ -42,6 +42,9 @@ from .stats import COLUMNS
 _INT_COLUMNS = frozenset({
     "tick", "population", "births", "deaths", "herbivores", "carnivores",
     "omnivores", "unclassified", "unique_genomes",
+    # appended in the upgrade
+    "max_generation", "deaths_starvation", "deaths_senescence",
+    "deaths_health", "deaths_predation",
 })
 
 #: The 1-in-20 sampling rule for feeding edges (deterministic, order-free).
@@ -160,7 +163,27 @@ class ExperimentDB:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(_SCHEMA)
+        self._migrate_tick_stats()
         self.conn.commit()
+
+    def _migrate_tick_stats(self) -> None:
+        """Add statistics columns introduced after the database was created.
+
+        ``CREATE TABLE IF NOT EXISTS`` leaves an older ``tick_stats`` alone, so a
+        database written before the upgrade would fail on the new columns.
+        Adding the missing ones is the additive, backward-compatible migration:
+        old rows get the column's default, no existing value changes, and the
+        original column order is preserved.
+        """
+        present = {row[1] for row in
+                   self.conn.execute("PRAGMA table_info(tick_stats)")}
+        for col in COLUMNS:
+            if col == "tick" or col in present:
+                continue
+            kind = "INTEGER" if col in _INT_COLUMNS else "REAL"
+            self.conn.execute(
+                f"ALTER TABLE tick_stats ADD COLUMN {col} {kind} "
+                f"NOT NULL DEFAULT 0")
 
     # -- lifecycle -----------------------------------------------------------
     def close(self) -> None:
@@ -271,6 +294,15 @@ class ExperimentDB:
                 row[col] = int(row[col])
             out.append(row)
         return out
+
+    def read_lineage(self, run_id: int) -> list[dict[str, Any]]:
+        """Recorded ancestry rows for a run, ordered by birth then organism ID."""
+        sql = ("SELECT org_id, parent_a, parent_b, birth_tick, death_tick, "
+               "generation, cause FROM lineage WHERE run_id=? "
+               "ORDER BY birth_tick, org_id")
+        return [dict(zip(("org_id", "parent_a", "parent_b", "birth_tick",
+                          "death_tick", "generation", "cause"), values))
+                for values in self.conn.execute(sql, (int(run_id),))]
 
     def append_lineage(self, run_id: int,
                        rows: Iterable[Mapping[str, Any]]) -> int:
@@ -428,6 +460,12 @@ def save_snapshot(engine, path: str) -> dict[str, Any]:
     for name in _LEDGER_FIELDS:
         payload[f"ledger_{name}"] = np.float64(getattr(engine.ledger, name))
     payload["damage_credit"] = _damage_credit_payload(engine)
+    payload["death_causes"] = np.asarray(sorted(engine.death_counts),
+                                        dtype="U32")
+    payload["death_counts"] = np.asarray(
+        [engine.death_counts[c] for c in sorted(engine.death_counts)],
+        dtype=np.int64)
+    payload["death_age_hist"] = np.asarray(engine.death_age_hist, dtype=np.int64)
     payload["config_hash"] = np.asarray(config_hash(engine.cfg))
     payload["spec_version"] = np.asarray(SPEC_VERSION)
     payload["format_version"] = np.int64(SNAPSHOT_FORMAT_VERSION)
@@ -505,6 +543,15 @@ def load_snapshot(path: str, config: Config):
             credit.setdefault(int(victim), []).append((int(attacker),
                                                        float(amount)))
         engine._damage_credit = credit
+        # Death counters are statistics, not dynamics, but a resumed run should
+        # keep reporting them, so they are stored when present. Snapshots from
+        # before this array existed simply start the counters at zero.
+        if "death_causes" in z.files:
+            engine.death_counts = {
+                str(cause): int(count) for cause, count
+                in zip(z["death_causes"], z["death_counts"])}
+            engine.death_age_hist = np.asarray(z["death_age_hist"],
+                                               dtype=np.int64).copy()
 
     engine._refresh_phen()
     return engine

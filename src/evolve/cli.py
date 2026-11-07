@@ -29,7 +29,9 @@ from .engine import Engine
 from .persistence import (
     ExperimentDB, SnapshotVersionError, load_snapshot, save_snapshot,
 )
-from .stats import StatsRecorder, export_csv, make_plots
+from .stats import (
+    StatsRecorder, export_csv, export_lineage_csv, make_plots,
+)
 
 
 class ConfigError(Exception):
@@ -134,6 +136,12 @@ def _cmd_run(args) -> int:
             eng = Engine(cfg)
 
         recorder = StatsRecorder()
+        # Ancestry is only collected when it will be stored: it is opt-in so a
+        # plain headless run pays nothing for it.
+        if db is not None:
+            from .stats import LineageRecorder
+
+            eng.lineage = LineageRecorder()
         started = time.perf_counter()
         while eng.tick < target:
             eng.step()
@@ -158,6 +166,13 @@ def _cmd_run(args) -> int:
                                 {"duration": ev.duration,
                                  "magnitude": ev.magnitude,
                                  "region": list(ev.region)})
+            # Finished lineage rows (bounded deque) plus still-living organisms,
+            # which have no death_tick yet and are written as such rather than
+            # given a fabricated one.
+            if eng.lineage is not None:
+                records = eng.lineage.rows()
+                if records:
+                    db.append_lineage(run_id, records)
             db.finish_run(run_id, eng.tick, "completed", checksum=checksum)
     finally:
         if db is not None:
@@ -203,14 +218,18 @@ def _cmd_report(args) -> int:
         else:
             run_id = int(args.run_id)
         rows = db.read_stats(run_id)
+        lineage = db.read_lineage(run_id)
     finally:
         db.close()
     if not rows:
         raise ConfigError(f"run {run_id} has no stored statistics")
     os.makedirs(args.out, exist_ok=True)
     export_csv(rows, os.path.join(args.out, "stats.csv"))
+    if lineage:
+        export_lineage_csv(lineage, os.path.join(args.out, "lineage.csv"))
     make_plots(rows, args.out)
-    print(f"report for run {run_id}: {len(rows)} rows -> {args.out}")
+    extra = f", {len(lineage)} lineage rows" if lineage else ""
+    print(f"report for run {run_id}: {len(rows)} rows{extra} -> {args.out}")
     return 0
 
 

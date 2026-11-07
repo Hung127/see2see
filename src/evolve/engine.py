@@ -38,6 +38,15 @@ from .world import World
 
 _EPS = 1e-12
 
+#: The only ways an organism can die. Used for cumulative per-cause counters.
+DEATH_CAUSES = ("predation", "starvation", "senescence", "health")
+
+#: Age-at-death histogram: fixed bins, so the survival curve costs O(1) memory.
+#: Bin ``i`` counts deaths at ages ``[i*width, (i+1)*width)``; the final bin also
+#: collects everything older than the range.
+DEATH_AGE_BIN = 25
+DEATH_AGE_BINS = 40
+
 
 class Engine:
     """One deterministic simulation instance."""
@@ -62,8 +71,19 @@ class Engine:
         self.births_total = 0
         self.deaths_total = 0
         self.mutations_total = 0
+        # Deaths by cause, cumulative. This is a *derived statistic*, not state:
+        # nothing in the tick reads it, so it is snapshotted (so statistics
+        # survive a resume) but deliberately excluded from ``checksum()``, whose
+        # contract is "arrays that can influence future dynamics".
+        self.death_counts: dict[str, int] = {cause: 0 for cause in DEATH_CAUSES}
+        # Age-at-death histogram (bounded memory; see DEATH_AGE_BIN). Statistics
+        # only — excluded from checksum for the same reason as death_counts.
+        self.death_age_hist = np.zeros(DEATH_AGE_BINS, dtype=np.int64)
         self.tick = 0
         self.stats = None  # wired to StatsRecorder in Task 18
+        # Optional bounded ancestry log (see stats.LineageRecorder). ``None`` by
+        # default so the tick pays nothing unless a caller asks for lineage.
+        self.lineage = None
         self.last_sensors = np.zeros((0, 16))
         self.last_outputs = np.zeros((0, 8))
         self.last_sensor_ids = np.zeros(0, dtype=np.int64)
@@ -364,6 +384,33 @@ class Engine:
             self.carcasses.biomass[dead_c] = 0.0
             self.carcasses.alive[dead_c] = False
 
+    def _record_deaths(self, idx: np.ndarray,
+                       causes: "np.ndarray | str | None" = None) -> None:
+        """Record deaths for statistics (histogram + optional lineage log).
+
+        Called from the two stages that kill organisms, *after* the cause is
+        known but before the slot is recycled. ``idx`` are slot indices whose
+        ``age`` is still valid (``compact()`` runs later in the tick).
+        ``causes`` is either a per-index array of strings or one string for all.
+        """
+        if idx.size == 0:
+            return
+        pop = self.population
+        bins = np.minimum(pop.age[idx] // DEATH_AGE_BIN,
+                          DEATH_AGE_BINS - 1)
+        self.death_age_hist += np.bincount(bins, minlength=DEATH_AGE_BINS)
+        if self.lineage is not None:
+            if causes is None:
+                cause_list = [str(pop.death_cause[int(i)]) for i in idx]
+            elif isinstance(causes, str):
+                cause_list = [causes] * idx.size
+            else:
+                cause_list = [str(c) for c in causes]
+            for i, cause in zip(idx, cause_list):
+                i = int(i)
+                self.lineage.record_death(int(pop.id[i]), self.tick,
+                                          cause, int(pop.age[i]))
+
     # -- stage 10: predation --------------------------------------------------
     def _predation(self, actions: Actions) -> None:
         """Strike the nearest organism in reach; kill credit is damage-weighted.
@@ -435,6 +482,7 @@ class Engine:
         dead = np.flatnonzero(pop.alive & (pop.health <= 0.0))
         if dead.size == 0:
             return
+        self._record_deaths(dead, "predation")
         killed = {int(pop.id[v]) for v in dead}
         slot_by_id = {int(pop.id[i]): i for i in np.flatnonzero(pop.alive)}
         for v in dead:
@@ -467,6 +515,7 @@ class Engine:
             pop.alive[v] = False
             pop.death_cause[v] = "predation"
             self.deaths_total += 1
+            self.death_counts["predation"] += 1
 
     # -- stage 11: metabolism -------------------------------------------------
     def _metabolise(self) -> None:
@@ -603,6 +652,11 @@ class Engine:
         pop.energy[parent] -= payer_share
         pop.repro_success[parent] += 1.0
         self.births_total += 1
+        if self.lineage is not None:
+            # Only new ids are recorded; the founders were never born in a tick,
+            # so they have no record and are honestly absent rather than invented.
+            self.lineage.record_birth(int(pop.id[slot]), parents[0], parents[1],
+                                      self.tick, generation)
         bix, biy = self.fields.cell_index(np.array([pop.x[parent]]),
                                           np.array([pop.y[parent]]))
         np.add.at(self.fields.soil, (bix, biy), waste)
@@ -630,6 +684,9 @@ class Engine:
         dead = health_dead | starved | old_age
         if not np.any(dead):
             return
+        cause = np.where(starved[dead], "starvation",
+                         np.where(old_age[dead], "senescence", "health"))
+        self._record_deaths(np.flatnonzero(dead), cause)
         # Animal deaths already became carcasses in _predation; what is left here
         # (starvation, senescence, residual health loss) is diffuse litter.
         self.detritus += float(pop.body[dead].sum() + pop.energy[dead].sum())
@@ -637,9 +694,11 @@ class Engine:
         pop.energy[dead] = 0.0
         pop.alive[dead] = False
         self.deaths_total += int(dead.sum())
-        cause = np.where(starved[dead], "starvation",
-                         np.where(old_age[dead], "senescence", "health"))
         pop.death_cause[dead] = cause
+        for name, count in zip(("starvation", "senescence", "health"),
+                               (starved[dead].sum(), old_age[dead].sum(),
+                                (~starved[dead] & ~old_age[dead]).sum())):
+            self.death_counts[name] += int(count)
 
     # -- stage 14: decomposition ---------------------------------------------
     def _decompose(self) -> None:

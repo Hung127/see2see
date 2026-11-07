@@ -62,7 +62,8 @@ def diversity(genomes: np.ndarray) -> dict:
     n = genomes.shape[0]
     if n == 0:
         return {"mean_pairwise": 0.0, "mean_variance": 0.0, "diet_entropy": 0.0,
-                "unique_genomes": 0}
+                "unique_genomes": 0, "trait_variance": 0.0,
+                "nn_variance": 0.0}
     stride = max(1, (n + _DIVERSITY_CAP - 1) // _DIVERSITY_CAP)
     sample = genomes[::stride][: _DIVERSITY_CAP]
     traits = phenotype(sample)[:, :N_TRAITS]
@@ -73,6 +74,11 @@ def diversity(genomes: np.ndarray) -> dict:
     else:
         mean_pairwise = 0.0
     mean_variance = float(genomes.var(axis=0).mean())
+    # Separate trait-locus and network-weight variance: they answer different
+    # questions ("is the phenotype pool narrowing?" vs "are the controllers
+    # diverging?"). Both are variances of *genetic values*, not phenotypes.
+    trait_variance = float(genomes[:, :N_TRAITS].var(axis=0).mean())
+    nn_variance = float(genomes[:, N_TRAITS:].var(axis=0).mean())
     diet = phenotype(sample)[:, 9]
     counts = np.bincount(np.clip((diet * _DIET_BINS).astype(np.int64), 0, _DIET_BINS - 1),
                          minlength=_DIET_BINS)
@@ -80,7 +86,30 @@ def diversity(genomes: np.ndarray) -> dict:
     diet_entropy = float(-(p * np.log2(p)).sum() / np.log2(_DIET_BINS))
     unique = len({hash_genome(g) for g in genomes})
     return {"mean_pairwise": mean_pairwise, "mean_variance": mean_variance,
-            "diet_entropy": diet_entropy, "unique_genomes": unique}
+            "diet_entropy": diet_entropy, "unique_genomes": unique,
+            "trait_variance": trait_variance, "nn_variance": nn_variance}
+
+
+def _survival_median(engine) -> float:
+    """Median age at death from the engine's bounded histogram.
+
+    Returns ``0.0`` until at least one death has been observed, so callers can
+    tell "not yet measured" from a real value. The histogram is cumulative and
+    coarse by design (25-tick bins); the value returned is the midpoint of the
+    bin containing the median death, which the column documentation states.
+    """
+    hist = getattr(engine, "death_age_hist", None)
+    if hist is None:
+        return 0.0
+    total = int(hist.sum())
+    if total == 0:
+        return 0.0
+    from .engine import DEATH_AGE_BIN
+
+    cumulative = np.cumsum(hist)
+    bin_index = int(np.searchsorted(cumulative, 0.5 * total, side="left"))
+    bin_index = min(bin_index, hist.size - 1)
+    return float((bin_index + 0.5) * DEATH_AGE_BIN)
 
 
 COLUMNS = (
@@ -95,7 +124,20 @@ COLUMNS = (
     "repro_attempts", "repro_successes", "rest_fraction", "foraging_efficiency",
     "plant_biomass", "carcass_biomass", "detritus", "soil",
     "mean_temperature", "mean_moisture",
+    # -- appended in the upgrade; never reorder the block above ---------------
+    "birth_rate", "death_rate",          # per organism per tick, this interval
+    "mean_generation", "max_generation",  # generation turnover
+    "trait_variance",                     # mean over the 12 trait loci
+    "nn_variance",                        # mean over the 380 network weights
+    "mean_organism_biomass",              # Σ(body+E)/n, living organisms
+    "deaths_starvation", "deaths_senescence", "deaths_health", "deaths_predation",
+    "survival_median",                    # age at which half of all deaths fall
+    "population_cv",                      # coefficient of variation in window
 )
+
+#: Columns added in the upgrade. Kept separate so persistence/tests can tell the
+#: additive block from the original schema without re-listing it.
+NEW_COLUMNS = COLUMNS[COLUMNS.index("birth_rate"):]
 
 
 class StatsRecorder:
@@ -108,6 +150,7 @@ class StatsRecorder:
         self._last_deaths = 0
         self._last_mutations = 0
         self._last_population = 0
+        self._last_tick = 0
         self._seen_hashes: set[bytes] = set()
 
     def record(self, engine) -> dict:
@@ -124,6 +167,8 @@ class StatsRecorder:
         self._last_mutations = engine.mutations_total
         growth = n - self._last_population  # per interval; k = interval length
         self._last_population = n
+        interval = max(1, engine.tick - self._last_tick)
+        self._last_tick = engine.tick
 
         roles = classify_roles(pop.plant_intake[idx], pop.meat_intake[idx]) \
             if n else []
@@ -139,7 +184,16 @@ class StatsRecorder:
         div = diversity(pop.genome[idx]) if n else {
             "mean_pairwise": 0.0, "mean_variance": 0.0,
             "diet_entropy": 0.0, "unique_genomes": 0,
+            "trait_variance": 0.0, "nn_variance": 0.0,
         }
+        # Per-capita rates over the elapsed interval. Dividing by population and
+        # by elapsed ticks makes rows comparable across sampling intervals; the
+        # raw ``births``/``deaths`` counters stay for exact reconciliation.
+        per_capita = float(interval) * max(1, self._last_population)
+        organism_biomass = (float(pop.body[idx].sum() + pop.energy[idx].sum())
+                            if n else 0.0)
+        cause = getattr(engine, "death_counts", {})
+        survival_median = _survival_median(engine)
         row = {
             "tick": engine.tick,
             "population": n,
@@ -182,9 +236,36 @@ class StatsRecorder:
             "soil": engine.soil_stock(),
             "mean_temperature": float(engine.fields.temperature.mean()),
             "mean_moisture": float(engine.fields.moisture.mean()),
+            "birth_rate": births / per_capita if per_capita else 0.0,
+            "death_rate": deaths / per_capita if per_capita else 0.0,
+            "mean_generation": mean("generation"),
+            "max_generation": int(pop.generation[idx].max()) if n else 0,
+            "trait_variance": div["trait_variance"],
+            "nn_variance": div["nn_variance"],
+            "mean_organism_biomass": organism_biomass / n if n else 0.0,
+            "deaths_starvation": int(cause.get("starvation", 0)),
+            "deaths_senescence": int(cause.get("senescence", 0)),
+            "deaths_health": int(cause.get("health", 0)),
+            "deaths_predation": int(cause.get("predation", 0)),
+            "survival_median": survival_median,
+            "population_cv": self._population_cv(n),
         }
         self.rows.append(row)
         return row
+
+    def _population_cv(self, current: int) -> float:
+        """Coefficient of variation of the recorded population in the window.
+
+        A stability measure, not a forecast: it is computed over the rows still
+        held by the ring buffer, so it reflects only observed samples.
+        """
+        values = [float(r["population"]) for r in self.rows]
+        values.append(float(current))
+        if len(values) < 2:
+            return 0.0
+        arr = np.asarray(values, dtype=np.float64)
+        mean = float(arr.mean())
+        return float(arr.std() / mean) if mean > 0.0 else 0.0
 
     def _last_tick(self) -> int:
         return self.rows[-1]["tick"] if self.rows else 0
@@ -202,6 +283,67 @@ class StatsRecorder:
 def extinction_events(recorder: StatsRecorder) -> list[dict]:
     """Extinction log of a recorder (convenience accessor)."""
     return recorder.extinctions
+
+
+class LineageRecorder:
+    """Bounded parent/child record for the living population and recent deaths.
+
+    The engine calls :meth:`record_birth` and :meth:`record_death` only when a
+    recorder is attached, so the default run pays nothing. Memory is bounded on
+    both sides:
+
+    * the living map holds at most one record per living organism (its size is
+      capped by ``Population.capacity``);
+    * finished records go to a deque of at most ``max_finished`` entries, so a
+      long run stores recent history, not all of it.
+
+    Ancestry is never invented. A parent whose record has already been evicted is
+    reported as ``parent_unknown`` rather than being guessed, and ``generation``
+    is the engine's own parent-generation counter — the lineage depth — not a
+    number computed here.
+    """
+
+    def __init__(self, max_finished: int = 5000) -> None:
+        self._living: dict[int, dict] = {}
+        self.finished: deque[dict] = deque(maxlen=int(max_finished))
+        self.births_recorded = 0
+        self.deaths_recorded = 0
+
+    def record_birth(self, org_id: int, parent_a: int | None,
+                     parent_b: int | None, tick: int, generation: int) -> None:
+        self._living[int(org_id)] = {
+            "org_id": int(org_id),
+            "parent_a": parent_a,
+            "parent_b": parent_b,
+            "birth_tick": int(tick),
+            "death_tick": None,
+            "generation": int(generation),
+            "cause": None,
+            "age_at_death": None,
+        }
+        self.births_recorded += 1
+
+    def record_death(self, org_id: int, tick: int, cause: str, age: int) -> None:
+        record = self._living.pop(int(org_id), None)
+        if record is None:
+            return  # born before the recorder was attached: no fabricated row
+        record["death_tick"] = int(tick)
+        record["cause"] = str(cause)
+        record["age_at_death"] = int(age)
+        self.finished.append(record)
+        self.deaths_recorded += 1
+
+    def living(self) -> list[dict]:
+        """Records for organisms still alive, ascending by ID."""
+        return [self._living[k] for k in sorted(self._living)]
+
+    def rows(self) -> list[dict]:
+        """Finished records (oldest first), suitable for ``lineage.csv``."""
+        return list(self.finished)
+
+    def lineage_depth_max(self) -> int:
+        """Deepest generation among living organisms (0 when none)."""
+        return max((r["generation"] for r in self._living.values()), default=0)
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +383,8 @@ def export_interactions_csv(records: list[dict], path: str) -> None:
 _PLOT_NAMES = (
     "population", "roles", "traits", "diversity", "mutation",
     "births_deaths", "predator_prey",
+    # added in the upgrade
+    "rates", "biomass", "environment", "survival",
 )
 
 
@@ -316,5 +460,38 @@ def make_plots(rows: list[dict], out_dir: str) -> None:
     ax.set_title("Predator–prey phase"); ax.set_xlabel("herbivores")
     ax.set_ylabel("carnivores")
     note_if_empty(ax); save("predator_prey")
+
+    # -- upgrade additions ---------------------------------------------------
+    fig, ax = plt.subplots()
+    ax.plot(ticks, _series(rows, "birth_rate"), label="births / (organism·tick)")
+    ax.plot(ticks, _series(rows, "death_rate"), label="deaths / (organism·tick)")
+    ax.set_title("Per-capita rates"); ax.set_xlabel("tick")
+    ax.set_ylabel("per organism per tick"); ax.legend(fontsize=8)
+    note_if_empty(ax); save("rates")
+
+    fig, ax = plt.subplots()
+    ax.plot(ticks, _series(rows, "mean_organism_biomass"),
+            label="organism biomass (mean)")
+    ax.plot(ticks, _series(rows, "plant_biomass"), label="plant biomass")
+    ax.plot(ticks, _series(rows, "carcass_biomass"), label="carcass biomass")
+    ax.plot(ticks, _series(rows, "detritus"), label="detritus")
+    ax.set_title("Biomass stocks"); ax.set_xlabel("tick")
+    ax.set_ylabel("biomass units"); ax.legend(fontsize=8)
+    note_if_empty(ax); save("biomass")
+
+    fig, ax = plt.subplots()
+    ax.plot(ticks, _series(rows, "mean_temperature"), label="temperature (°C)")
+    ax.plot(ticks, _series(rows, "mean_moisture"), label="moisture (0–1)")
+    ax.set_title("Environmental conditions"); ax.set_xlabel("tick")
+    ax.legend(fontsize=8)
+    note_if_empty(ax); save("environment")
+
+    fig, ax = plt.subplots()
+    if rows:
+        ax.plot(ticks, _series(rows, "survival_median"),
+                label="median age at death")
+    ax.set_title("Survival"); ax.set_xlabel("tick"); ax.set_ylabel("age (ticks)")
+    ax.legend(fontsize=8)
+    note_if_empty(ax); save("survival")
 
 

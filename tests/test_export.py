@@ -61,11 +61,15 @@ def test_export_empty_rows(tmp_path):
 
 
 def test_plots_written(tmp_path):
+    from evolve.stats import _PLOT_NAMES
+
     rows = collect_rows(60)
     out = tmp_path / "plots"
     make_plots(rows, str(out))
     names = sorted(p.name for p in out.iterdir())
-    assert len(names) == 7
+    # Every declared plot must be produced; checking against _PLOT_NAMES means a
+    # newly added plot is covered automatically instead of silently unasserted.
+    assert names == sorted(f"{name}.png" for name in _PLOT_NAMES)
     for name in names:
         assert name.endswith(".png")
         assert (out / name).stat().st_size > 0
