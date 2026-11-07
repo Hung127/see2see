@@ -227,8 +227,8 @@ class StatsRecorder:
             "mean_escapes": mean("escapes"),
             "repro_attempts": float(pop.repro_attempts[idx].sum()) if n else 0.0,
             "repro_successes": float(pop.repro_success[idx].sum()) if n else 0.0,
-            "rest_fraction": (float(pop.rest_ticks[idx].sum()) / n
-                              / max(1, engine.tick)) if n else 0.0,
+            "rest_fraction": (float(pop.rest_ticks[idx].sum())
+                              / max(1, int(pop.age[idx].sum()))) if n else 0.0,
             "foraging_efficiency": (intake / moved) if moved > 0.0 else 0.0,
             "plant_biomass": engine.plants.total_biomass(),
             "carcass_biomass": engine.carcasses.total_biomass(),

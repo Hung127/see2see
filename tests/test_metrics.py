@@ -116,6 +116,26 @@ def test_survival_median_is_a_bin_midpoint():
     assert _survival_median(fake) == 0.5 * DEATH_AGE_BIN
 
 
+def test_rest_fraction_is_a_lifetime_mean_not_a_tick_average():
+    """Σ rest_ticks / Σ age over living animals; not Σ rest_ticks / (n · tick).
+
+    Founder ages equal the current tick, so the two formulas agree unless the
+    ages are set explicitly — which is what this test does. Anchoring on ages
+    keeps the metric honest for a mixed-age population after births.
+    """
+    eng = Engine(make_config(seed=9, n=4))
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    assert idx.size == 4
+    pop.rest_ticks[idx] = [5.0, 0.0, 0.0, 0.0]
+    pop.age[idx] = [20, 100, 100, 100]
+
+    row = StatsRecorder().record(eng)
+
+    assert row["rest_fraction"] == pytest.approx(5.0 / 320.0)
+    assert row["rest_fraction"] != pytest.approx(5.0 / 4 / max(1, eng.tick))
+
+
 def test_population_cv_zero_for_constant_population():
     rec = StatsRecorder()
     for pop in (10, 10, 10, 10):

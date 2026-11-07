@@ -474,6 +474,18 @@ class Engine:
         pop.health[pop.health < 0.0] = 0.0
         np.add.at(pop.damage_taken, target, damage)  # victims may be hit twice
 
+        # Escapes = attacks survived (DESIGN §8): every damaging strike whose
+        # victim is still standing once this tick's strikes are resolved. A
+        # victim hit by two attackers in one tick survives two attacks, so it is
+        # credited twice. This is a per-organism lifetime counter, never read by
+        # the tick, so it stays out of ``checksum()`` and is snapshotted with the
+        # other counters; nothing else in the simulation changes.
+        hurt = damage > 0.0
+        if np.any(hurt):
+            survived = hurt & (pop.health[target] > 0.0)
+            if np.any(survived):
+                np.add.at(pop.escapes, target[survived], 1.0)
+
         # Credit is cumulative per victim and capped at 8 attackers.
         for a, v, d in zip(rows, target, damage):
             if d <= 0.0:

@@ -112,10 +112,13 @@ constraint, CPU is.
    no supported way to sweep one parameter and report the response.
 5. **No ODD document.** The protocol is described across DESIGN/ARCHITECTURE but
    not in the standard Overview–Design–Details form.
-6. **`rest_fraction` divides a lifetime counter by the current tick**, which is
-   correct for a cohort that all started at tick 0 but is mislabelled: it is the
-   mean fraction of a lifetime spent resting, not a population rate.
-7. **`escapes` is never incremented** (already documented as a known gap).
+6. **`rest_fraction` divided a lifetime counter by the current tick**, which was
+   correct for a cohort that all started at tick 0 but mislabelled for a
+   mixed-age population. **Fixed:** it is now `Σ rest_ticks / Σ age` over living
+   organisms — a per-organism lifetime mean.
+7. **`escapes` was never incremented** (already documented as a known gap).
+   **Fixed:** a damaging strike whose victim survives the tick is now credited
+   once per strike in `Engine._predation`.
 8. **Truncated damage credit** (max 8 attackers) is a real approximation and is
    documented, not hidden.
 

@@ -206,17 +206,24 @@ in the code. Diversity proxies are named proxies: `mean_pairwise`,
 
 ### Honest gaps in this area
 
-* `escapes` is declared on every organism and read by `stats.py`, `panels.py`
-  and `inspect()`, but **nothing in the engine ever increments it**. The column
-  `mean_escapes` is therefore always zero. This is a pre-existing bug, now
-  reported rather than hidden; fixing it needs a decision about what counts as
-  a survived attack (every strike that does not kill?) and would change
-  `SPEC_VERSION`, so it was left as a documented limitation instead of a silent
-  semantic change.
-* `rest_fraction` divides a *lifetime* counter by the *current* tick. That is
-  correct for a cohort all born at tick 0 and mislabelled for a mixed-age
-  population. It is documented as "mean fraction of a lifetime spent resting",
-  not a population rate.
+Two gaps found by the audit were **fixed** after the report was first written.
+Both are statistics-only, so they change no state transition, no RNG draw and
+no checksum (`SPEC_VERSION` stays `"1"`); both are covered by regression tests.
+
+* `escapes` is now incremented in `Engine._predation`: a **damaging strike whose
+  victim is still alive after the tick's strikes resolve** counts as one
+  survived attack. A victim hit by two attackers and still standing is credited
+  twice — the counter answers "how many attacks has this animal survived", not
+  "how many fights". The letter of the contract is in DESIGN §8. Note that the
+  count is not proof of evasion: it measures survival of a strike, which may
+  also be defence or sheer body mass.
+* `rest_fraction` is now a **lifetime mean per living organism**,
+  `Σ rest_ticks / Σ age`, instead of `Σ rest_ticks / n / tick`. The old formula
+  was only correct for a cohort born at tick 0; the new one is the mean
+  fraction of its own life that an average living animal has spent resting.
+
+Neither counter is read by the tick, so neither is part of `checksum()`; both
+are snapshotted with the other per-organism counters.
 
 ---
 
@@ -432,8 +439,13 @@ Reported, not hidden:
 
 * **DESIGN §11 throughput targets are missed** — 8.36 vs 12 ticks/s at 1,000
   organisms. The remaining cost is semantics-preserving-unavoidable.
-* **`escapes` is never incremented.** `mean_escapes` is always zero.
-* **`rest_fraction` is a lifetime mean**, not a per-tick rate.
+* **`escapes` counts survived strikes, not successful evasions.** A strike that
+  does no damage is not an escape; a strike the victim survives because of
+  armour or size still is. The column is honest about what it measures, but it
+  is not a measure of agility.
+* **`rest_fraction` is a lifetime mean** over living organisms, not a per-tick
+  population rate, and animals that died are not in the mean (their lifetime
+  resting is not reconstructible from the live counters).
 * **Controller and sensitivity results here are underpowered nulls** (n = 2,
   short horizons), not findings. The neural arm is the random shipped MLP.
 * **The viewer's frame rate is unmeasured on a desktop GPU or under a large
@@ -460,7 +472,6 @@ Each is deferred with a reason, not forgotten:
 | **Controller-complexity analysis** | Needs a complexity measure agreed before the comparison is meaningful; premature without the NEAT experiment. |
 | **Behavioural-specialisation analysis** | Would need a behavioural-diversity metric distinct from genetic diversity; conflating them is explicitly forbidden. |
 | **Design-scale runs of every experiment** | ~7.5 h on this machine (state in `BENCHMARKS.md`); scaled runs are what the suite executes. |
-| **Fixing `escapes`** | Changes what an existing counter means, so it needs `SPEC_VERSION` bump and a semantics note; left documented rather than changed silently. |
 | **60 FPS at the largest scene** | The measured terrain fill (~15.5 ms) is the floor; the only faster option measured was not pixel-equivalent, so it was rejected rather than quietly accepted. |
 
 ---

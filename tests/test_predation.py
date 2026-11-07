@@ -111,6 +111,76 @@ def test_predation_split():
     eng.ledger.assert_closed(m0, eng.mass_stock(), e0, eng.energy_stock())
 
 
+def test_survived_strike_counts_as_one_escape():
+    """``escapes`` is "attacks survived", not "attacks received" (DESIGN §8)."""
+    eng, pop = scene(2)
+    pop.x[:] = [100.0, 101.0]
+    pop.y[:] = [250.0, 250.0]
+    set_traits(pop, 0, attack=1.0, diet=1.0)
+    set_traits(pop, 1, defense=0.0, diet=0.5)
+    phen = phenotype(pop.genome)
+    pop.body[:] = phen[:, 0]
+    pop.health[1] = 100.0
+
+    eng._predation(actions_for(2, attack=[0]))
+
+    assert pop.alive[1]
+    assert float(pop.escapes[1]) == 1.0
+    assert float(pop.escapes[0]) == 0.0
+
+
+def test_killing_strike_is_not_an_escape():
+    eng, pop = scene(2)
+    pop.x[:] = [100.0, 101.0]
+    pop.y[:] = [250.0, 250.0]
+    set_traits(pop, 0, attack=5.0, diet=1.0)
+    set_traits(pop, 1, defense=0.0, diet=0.5)
+    phen = phenotype(pop.genome)
+    pop.body[:] = phen[:, 0]
+    pop.health[1] = 1.0
+
+    eng._predation(actions_for(2, attack=[0]))
+
+    assert not pop.alive[1]
+    assert float(pop.escapes[1]) == 0.0
+
+
+def test_two_attackers_survived_give_two_escapes():
+    """Each damaging strike the victim survives is credited, per strike."""
+    eng, pop = scene(3)
+    pop.x[:] = [100.0, 101.0, 99.0]
+    pop.y[:] = [250.0, 250.0, 250.0]
+    set_traits(pop, 0, defense=0.0, diet=0.5)
+    set_traits(pop, 1, attack=1.0, diet=1.0)
+    set_traits(pop, 2, attack=1.0, diet=1.0)
+    phen = phenotype(pop.genome)
+    pop.body[:] = phen[:, 0]
+    pop.health[0] = 100.0
+
+    eng._predation(actions_for(3, attack=[1, 2]))
+
+    assert pop.alive[0]
+    assert float(pop.escapes[0]) == 2.0
+
+
+def test_escapes_do_not_enter_the_checksum():
+    """The counter is a statistic: resetting it must not change state identity."""
+    eng, pop = scene(2)
+    pop.x[:] = [100.0, 101.0]
+    pop.y[:] = [250.0, 250.0]
+    set_traits(pop, 0, attack=1.0, diet=1.0)
+    set_traits(pop, 1, defense=0.0, diet=0.5)
+    phen = phenotype(pop.genome)
+    pop.body[:] = phen[:, 0]
+    pop.health[1] = 100.0
+
+    eng._predation(actions_for(2, attack=[0]))
+    assert float(pop.escapes[1]) == 1.0
+    before = eng.checksum()
+    pop.escapes[:] = 0.0
+    assert eng.checksum() == before
+
+
 def test_carcass_decay_closes_ledger():
     led = Ledger()
     carc = Carcasses()

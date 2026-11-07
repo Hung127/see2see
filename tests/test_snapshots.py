@@ -62,6 +62,14 @@ def test_resume_equals_continuation(tmp_path):
     assert resumed.population.n_alive == direct.population.n_alive
     assert resumed.births_total == direct.births_total
     assert resumed.deaths_total == direct.deaths_total
+    # Per-organism counters are state too, even though they stay out of the
+    # checksum (they are statistics, not dynamics): a resumed run must not lose
+    # the escapes/rest history it had accumulated before the snapshot.
+    alive = np.flatnonzero(direct.population.alive)
+    for name in ("escapes", "rest_ticks", "hunts", "bites", "damage_taken"):
+        assert np.array_equal(getattr(resumed.population, name),
+                              getattr(direct.population, name)), name
+    assert alive.size <= resumed.population.alive.size
 
 
 def test_unknown_version_refused(tmp_path):
