@@ -677,7 +677,7 @@ Each is deferred with a reason, not forgotten:
 |---|---|
 | [`AUDIT.md`](AUDIT.md) | Phase 1 audit (unchanged since writing it; it is a before-picture) |
 | [`BENCHMARKS.md`](BENCHMARKS.md) | Optimization pass, before/after throughput, profile, memory, viewer/analytics cost |
-| [`ODD.md`](ODD.md) | Sensitivity and controller paragraphs in §2.6/§2.7 and §5 |
+| [`ODD.md`](ODD.md) | Sensitivity and controller paragraphs in §2.6/§2.7 and §5; trait sweeps and the bottleneck indicator |
 | [`EXPERIMENTS.md`](EXPERIMENTS.md) | Statistics table is now 58 columns (40 + 13 + 2 + 3 appended), never reordered; trait sweeps and the bottleneck indicator documented |
 | [`README.md`](README.md) | Ancestry section and key, updated status, link to this report |
 | **`UPGRADE.md`** | This report |

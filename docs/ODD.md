@@ -424,8 +424,15 @@ These are limitations, not omissions to be papered over:
 * **Sensitivity:** declared one-factor sweeps (`cli sensitivity`, module
   `sensitivity.py`) report paired-seed outcomes per parameter value; small
   sample sizes are stated, and no sweep result is presented as a trend when
-  the p-value does not support it. The smoke run in `docs/UPGRADE.md` is
-  reported as underpowered, not as a finding.
+  the p-value does not support it. Six sweeps vary a config coefficient and
+  three vary a founder trait locus (a genome value set before tick 1, not a
+  config field). The smoke run in `docs/UPGRADE.md` is reported as
+  underpowered, not as a finding.
+* **Bottleneck indicator:** `stats.bottleneck` flags a sample when both the
+  population and the genetic spread have fallen by at least half from their own
+  peak in the retained window. It is a contraction indicator, not an effective
+  population size (that needs a neutral-locus coalescent model this model does
+  not satisfy) and not a species count.
 
 ## References
 
