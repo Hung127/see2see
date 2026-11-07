@@ -768,6 +768,11 @@ class Engine:
             "health": float(pop.health[i]),
             "generation": int(pop.generation[i]),
             "parents": parents,
+            # The decision source for this run. ``None`` is the shipped evolved
+            # MLP; a baseline name only appears when an evaluation run opted in.
+            "controller": ("neural" if self.controller is None
+                           else str(getattr(self.controller, "name",
+                                            type(self.controller).__name__))),
             "position": (float(pop.x[i]), float(pop.y[i])),
             "heading": float(pop.heading[i]),
             "phenotypes": phenotype(genome[None, :])[0],

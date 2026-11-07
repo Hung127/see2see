@@ -361,6 +361,7 @@ def organism_rows(payload: dict) -> list[tuple[str, str]]:
         ("body mass", f"{amount(body)} bu"),
         ("diet gene", f"{diet:.2f} · {diet_word(diet)}"),
         ("role (from intake)", role),
+        ("controller", str(payload.get("controller", "neural"))),
         ("speed max", f"{phen[1]:.1f} u/tick"),
         ("vision", f"{phen[2]:.0f} u · {phen[3]:.0f}° cone"),
         ("attack / defense", f"{phen[5]:.2f} / {phen[6]:.2f}"),
@@ -368,10 +369,13 @@ def organism_rows(payload: dict) -> list[tuple[str, str]]:
         ("lifetime intake",
          f"{amount(float(counters.get('plant_intake', 0.0)))} plant · "
          f"{amount(float(counters.get('meat_intake', 0.0)))} meat bu"),
+        ("reproduction",
+         f"{counters.get('repro_success', 0):.0f} born of "
+         f"{counters.get('repro_attempts', 0):.0f} attempts"),
         ("lifetime actions",
          f"{counters.get('bites', 0):.0f} bites · "
          f"{counters.get('hunts', 0):.0f} attacks · "
-         f"{counters.get('repro_success', 0):.0f} children"),
+         f"{counters.get('escapes', 0):.0f} escapes"),
         ("distance moved", f"{amount(float(counters.get('dist_moved', 0.0)))} u"),
     ]
 

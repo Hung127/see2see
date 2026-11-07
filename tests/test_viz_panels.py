@@ -251,13 +251,18 @@ def test_organism_rows_report_gene_and_measured_intake_separately():
                                 0.4, 0.2, 500.0, 0.01]),
         "parents": (3, 4),
         "counters": {"plant_intake": 12.0, "meat_intake": 0.5, "bites": 40,
-                     "hunts": 1, "repro_success": 2, "dist_moved": 900.0},
+                     "hunts": 1, "escapes": 3, "repro_success": 2,
+                     "repro_attempts": 5, "dist_moved": 900.0},
     }
     rows = dict(panels.organism_rows(payload))
     assert rows["diet gene"].startswith("0.20")      # the gene, not behaviour
     assert "herbivore-leaning" in rows["diet gene"]
     assert "12." in rows["lifetime intake"] and "plant" in rows["lifetime intake"]
     assert rows["parents"] == "3 + 4"
+    # Attempts are shown beside successes: a failed attempt is real information.
+    assert rows["reproduction"] == "2 born of 5 attempts"
+    # The panel names the decision source; it defaults to the evolved network.
+    assert rows["controller"] == "neural"
 
 
 def test_inspector_role_matches_the_population_classification():

@@ -83,3 +83,21 @@ def test_inspect_reports_no_vectors_instead_of_someone_elses():
     assert not np.any(d["sensors"]) and not np.any(d["outputs"])
     pop.id[i] = real_id
 
+
+
+def test_inspect_names_the_decision_source():
+    """The inspector must say which controller is deciding.
+
+    ``None`` is the shipped evolved network, and that is what a default run
+    uses; a baseline name only appears when an evaluation run opts in. The
+    panel would otherwise imply the MLP is always the decision maker.
+    """
+    from evolve.controllers import build_controller
+
+    eng = Engine(small_config(organisms=6, seed=2))
+    eng.step()
+    assert eng.inspect(0)["controller"] == "neural"
+
+    eng.controller = build_controller("rule")
+    eng.step()
+    assert eng.inspect(0)["controller"] == "rule"
