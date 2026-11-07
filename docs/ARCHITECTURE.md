@@ -126,6 +126,9 @@ Design rules the code follows:
   environmental event is outlined on the field with the `Event.region` the
   scheduler actually applies, and the panel names that outline colour
   (`palette.EVENT_COLOUR_WORDS`) so the text and the ring are one statement.
+  The inspector's `role (from intake)` row calls the same
+  `stats.classify_roles` as the population counts, so one animal and the
+  population cannot be described by two different rules.
 * **Simulation truth only.** The inspector shows the exact vectors from the
   last think step. Since slots are compacted and re-sorted after thinking,
   `Engine.inspect` matches rows by organism **id** (`last_sensor_ids`) and

@@ -244,6 +244,27 @@ def test_organism_rows_report_gene_and_measured_intake_separately():
     assert rows["parents"] == "3 + 4"
 
 
+def test_inspector_role_matches_the_population_classification():
+    """The one animal's role and the population counts are the same measure.
+
+    The population section promises that roles come from lifetime intake. The
+    inspector now shows the same label for the selected animal, computed by the
+    same function, so a reader cannot see two different names for one diet.
+    """
+    eng = Engine(small_config(organisms=6))
+    eng.step()
+    pop = eng.population
+    idx = np.flatnonzero(pop.alive)
+    pop.plant_intake[idx] = 5.0
+    pop.meat_intake[idx] = 20.0          # meat > 2·plant -> carnivore
+    label = panels.organism_rows(eng.inspect(int(idx[0])))
+    assert dict(label)["role (from intake)"] == panels.stats_mod.ROLE_CARNIVORE
+    # And it is the label the population section counts, not a parallel guess.
+    assert panels.role_counts(eng)[panels.stats_mod.ROLE_CARNIVORE] == idx.size
+    rows = [name for name, _ in panels.organism_rows(eng.inspect(int(idx[0])))]
+    assert rows.index("role (from intake)") < rows.index("lifetime intake")
+
+
 def test_amount_formats_without_false_precision():
     assert panels.amount(float("nan")) == "—"
     assert panels.amount(3.14159) == "3.14"

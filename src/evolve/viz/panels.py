@@ -346,6 +346,13 @@ def organism_rows(payload: dict) -> list[tuple[str, str]]:
     parent_text = "none (founder)" if parents[0] is None and parents[1] is None \
         else f"{parents[0]} + {parents[1]}"
     diet = float(phen[9]) if phen.size > 9 else 0.0
+    # The population section classifies roles from lifetime intake; the
+    # inspector shows the same classification for this one animal, from the
+    # same function, so the two readouts cannot disagree. The gene above is a
+    # preference; this row is the evidence.
+    role = stats_mod.classify_roles(
+        np.array([float(counters.get("plant_intake", 0.0))]),
+        np.array([float(counters.get("meat_intake", 0.0))]))[0]
     return [
         ("id / generation", f"{payload.get('id')} / {payload.get('generation')}"),
         ("age", f"{payload.get('age')} ticks"),
@@ -353,6 +360,7 @@ def organism_rows(payload: dict) -> list[tuple[str, str]]:
         ("health", f"{amount(float(payload.get('health', 0.0)))} / 100"),
         ("body mass", f"{amount(body)} bu"),
         ("diet gene", f"{diet:.2f} · {diet_word(diet)}"),
+        ("role (from intake)", role),
         ("speed max", f"{phen[1]:.1f} u/tick"),
         ("vision", f"{phen[2]:.0f} u · {phen[3]:.0f}° cone"),
         ("attack / defense", f"{phen[5]:.2f} / {phen[6]:.2f}"),
@@ -857,6 +865,11 @@ HELP_BLOCKS = (
         "The output rows show both the raw score and the decision: a value above "
         "0.5 means yes. Rest overrides eating and attacking, and the rows say so "
         "when that happens. F locks the camera onto the animal, X clears it.",
+        "Two rows look similar and answer different questions. 'diet gene' is "
+        "the inherited preference that colours the sprite; 'role (from intake)' "
+        "is what this animal has actually eaten, by the same rule that produces "
+        "the herbivore/omnivore/carnivore counts for the whole population. They "
+        "can disagree, and that difference is real.",
     )),
     ("Why did the panel change?", (
         "If the inspected animal dies, the panel returns to the population view "

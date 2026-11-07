@@ -59,6 +59,10 @@ panel on the right, a control strip along the bottom.
   a score above 0.5 means yes. `resulting speed` is what `actions.decode`
   actually produced, so a resting organism shows no movement; `rest` also
   blocks eating and attacking, and those rows say so.
+* **Gene vs role.** The inspector shows `diet gene` (the inherited preference
+  that colours the sprite) and `role (from intake)` (what the animal has
+  actually eaten, by the same rule the population counts use). They can
+  disagree, and that disagreement is the point: preference is not diet.
 * **Statistics.** Population, births/deaths/mutations, role counts, the
   conserved matter pools (plant biomass, carcasses, detritus, organism tissue,
   soil nutrients) **plus the total and the value it started from**, averages,
@@ -126,7 +130,7 @@ large population, so treat frame-rate claims as unmeasured.
 
 ## Status
 
-Milestones M1–M7 are implemented and tested (194 tests). Measured throughput on
+Milestones M1–M7 are implemented and tested (195 tests). Measured throughput on
 a single-core machine misses the design's §11 targets — see
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the honest numbers. NEAT-style
 speciation (M8) is deferred.
