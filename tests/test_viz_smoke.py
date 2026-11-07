@@ -96,3 +96,23 @@ def test_lineage_view_does_not_change_the_checksum():
 
     assert app.engine.tick == plain.tick
     assert app.engine.checksum() == plain.checksum()
+
+
+def test_run_label_is_display_text_only():
+    """The name shown for the loaded run must not reach the simulation.
+
+    The sidebar names the run so a screenshot says which experiment it is. That
+    value is presentation state: setting it must leave the engine untouched, so
+    two viewers differing only in the label produce the same checksum.
+    """
+    from evolve.viz.app import make_app
+
+    a = make_app(small_config(), speed=1)
+    b = make_app(small_config(), speed=1)
+    a.state.run_label = "experiment_a.yaml"
+    assert b.state.run_label == ""
+    for _ in range(10):
+        a.run_frame()
+        b.run_frame()
+    assert a.engine.checksum() == b.engine.checksum()
+    assert a.state.run_label == "experiment_a.yaml"

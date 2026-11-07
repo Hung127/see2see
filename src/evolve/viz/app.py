@@ -66,6 +66,10 @@ class ViewState:
         self.ancestry_scroll = 0
         self.ancestry_height = 0
         self.ancestry_view = 0
+        # What run this is, as the caller named it (the config file basename for
+        # the `viz` command). Empty means the caller did not say, and the panel
+        # then omits the row instead of inventing a label.
+        self.run_label = ""
         # Draw the selected organism's vision cone and detected targets.
         self.show_perception = True
 
@@ -578,7 +582,8 @@ class VizApp:
         pygame.image.save(self.screen, path)
 
 
-def make_app(config: Config, speed: int = 1) -> VizApp:
+def make_app(config: Config, speed: int = 1,
+             run_label: str = "") -> VizApp:
     """Build the viewer for ``config``, with lineage logging attached.
 
     The recorder is observation only — a test asserts the checksum is identical
@@ -587,16 +592,22 @@ def make_app(config: Config, speed: int = 1) -> VizApp:
     long viewer session cannot grow memory without limit. Without it the
     ancestry view could show only the parent ids stored on the living
     population and would have to say that the chain is unavailable.
+
+    ``run_label`` is whatever the caller calls this run (the CLI passes the
+    config file name). It is display text only and never reaches the engine, so
+    it cannot influence the simulation.
     """
     from ..stats import LineageRecorder
 
     engine = Engine(config)
     engine.lineage = LineageRecorder()
-    return VizApp(engine, speed=speed)
+    app = VizApp(engine, speed=speed)
+    app.state.run_label = str(run_label or "")
+    return app
 
 
-def launch(config: Config) -> None:
-    app = make_app(config)
+def launch(config: Config, run_label: str = "") -> None:
+    app = make_app(config, run_label=run_label)
     # Open the guide once, before anything moves: a first-time user has no way
     # to know what the dots mean, and the guide is modal so nothing happens
     # behind their back while they read it. H or Escape closes it.

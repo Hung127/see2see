@@ -591,6 +591,11 @@ def draw_sidebar(screen: pygame.Surface, rect: pygame.Rect,
     status = "PAUSED — SPACE to run" if state.paused else f"RUNNING  {state.speed}×"
     status_color = WARN if state.paused else GOOD
     p.row(f"tick {engine.tick:,}", status, status_color)
+    if getattr(state, "run_label", ""):
+        # The run's own identity, as the caller named it (the config file for
+        # `viz`). Shown so a reader can tell which experiment a screenshot
+        # belongs to; it is not a title invented for display.
+        p.text(state.run_label, TEXT_FAINT, "small")
     if getattr(state, "follow", False) and state.selected_id is not None:
         # Without a marker the camera appears to drift on its own, which reads
         # as a bug rather than as "you pressed F".

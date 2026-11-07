@@ -268,7 +268,10 @@ def _cmd_report(args) -> int:
 
 def _cmd_viz(args) -> int:
     from .viz.app import launch  # lazy: pygame is an optional dependency
-    launch(_load_config(args.config))
+    # The config file's name is the run's real identity for the viewer's status
+    # line; it is display text only and never reaches the engine.
+    launch(_load_config(args.config),
+           run_label=os.path.basename(args.config))
     return 0
 
 
