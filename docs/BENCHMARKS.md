@@ -130,6 +130,73 @@ Memory at 1,000 organisms: traced steady state **6.5 MB**, traced peak
 **56.4 MB**, process peak RSS **113 MB** (was 57.4 MB / 122 MB). Still far
 inside the < 650 MB target and lower than the baseline.
 
+## Viewer and analytics cost (upgrade, Phase 6)
+
+Rendering is measured separately from the simulation, because IMPROVE §8
+requires that drawing never compromise the tick. All figures are this machine,
+headless (`SDL_VIDEODRIVER=dummy`, 1280×800 or 1400×860 Surface).
+
+### World drawing
+
+`draw_world` includes the terrain grid, plants, carrion, organisms and event
+outlines. "Before" is the scalar per-entity path; "after" is the vectorised
+culling committed in `fed8997`.
+
+| Scene | draw before | draw after | note |
+|---|---|---|---|
+| default 6.4k plants / 300 orgs | ~30 ms | **~20 ms** | terrain fill is now the largest term |
+| 20k plants / 1,000 orgs | ~45 ms | **~28 ms** | |
+| 20k plants, zoomed 8× | — | **~4 ms** | culled cells/plants shrink with the viewport |
+
+The plant layer alone fell from 27 ms to 3.2 ms at default density and from
+27 ms to 9.8 ms at 20k plants. The remaining default-frame cost is the terrain
+rect loop (~15.5 ms), which is *not* optimised: a batched blit was measured and
+rejected because it was not pixel-equivalent (187k–321k differing pixels) and
+was slower once zoomed in.
+
+Frame cost at 60 FPS therefore still exceeds one frame at the largest scene, so
+the viewer drops frames rather than the simulation dropping steps: the loop
+steps `speed` ticks per rendered frame and the clock caps display at 60 Hz.
+
+### Analytics sampling
+
+`AnalyticsHistory` samples on **simulated time** (`SAMPLE_INTERVAL = 20` ticks,
+`HISTORY_CAP = 600` samples), not frames, so the x axis means ticks at any
+speed and history cannot grow without bound.
+
+Worst case measured by forcing a sample every tick (300 organisms, 500×500,
+16×16 fields):
+
+| | ms/tick |
+|---|---|
+| engine only | 28.03 |
+| engine + forced sample | 32.27 |
+| **sampling overhead** | **+4.2 ms** |
+
+In normal use the sample runs once per 20 ticks, so its amortised cost is
+≈0.2 ms/tick — small beside the engine's own tick. The forced-every-tick figure
+is the ceiling, recorded so the cost is stated rather than assumed.
+
+### Analytics view
+
+A full analytics redraw (all 20 chart blocks, ~30 fps measured on this machine)
+is independent of the tick: charts are rebuilt from the capped sample deque, not
+from a full history. Scrolling clamps against the previous frame's measured
+height, and points per series are capped at 180, so neither the number of
+samples nor the scroll position can make a frame unbounded.
+
+### Memory
+
+| | RSS |
+|---|---|
+| after the throughput bench (1,000 + 5,000 org worlds) | 73.6 MB |
+| process high-water mark across the whole measurement run | 339.7 MB |
+| end of run (viewer + analytics history live) | 88.0 MB |
+
+Peak RSS 339.7 MB stays inside the < 650 MB target. The high-water mark comes
+from the 5,000-organism point (100k plants), which is a deliberate stress case,
+not the calibrated default.
+
 
 
 Estimates only. Rate model: measured organism-ticks/s ≈ 4,800 (linear in

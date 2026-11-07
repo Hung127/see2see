@@ -413,3 +413,70 @@ def test_analytics_scroll_never_draws_a_blank_frame():
                                              - app.state.analytics_view)
     colours = {tuple(c) for c in surf[::40, ::40].reshape(-1, 3)}
     assert len(colours) > 3, "the analytics grid should still be drawn"
+
+
+# -- live distributions (IMPROVE §6.4 items 3 and 4) -------------------------
+def test_live_histograms_count_exactly_the_living_population():
+    """A distribution must describe who is alive, not a stale or padded array.
+
+    The population arrays are capacity-padded until ``compact()``, so summing
+    the raw attribute would count dead slots as organisms. Every live organism
+    must land in exactly one bin.
+    """
+    from evolve.viz.analytics import LIVE_HISTOGRAMS, _live_histogram
+
+    eng = Engine(small_config(organisms=40))
+    eng.run(10)
+    pop = eng.population
+    living = int(pop.alive.sum())
+    assert living > 0
+    for key, (attr, span, bins, _label, _caption) in LIVE_HISTOGRAMS.items():
+        counts = _live_histogram(eng, attr, span, bins)
+        assert counts.shape == (bins,), key
+        assert counts.sum() == living, key
+
+
+def test_live_histogram_is_empty_not_zero_when_nobody_is_alive():
+    """No animals is no data. Zero-height bins must not be drawn as measurements."""
+    from evolve.viz.analytics import BODY_HIST_BINS, BODY_HIST_RANGE, _live_histogram
+
+    eng = Engine(small_config(organisms=10))
+    eng.step()
+    pop = eng.population
+    pop.alive[:] = False
+    assert pop.n_alive == 0          # n_alive is derived from the alive mask
+    counts = _live_histogram(eng, "body", BODY_HIST_RANGE, BODY_HIST_BINS)
+    assert counts.sum() == 0
+    assert not counts.any()
+
+
+def test_histogram_can_be_given_an_explicit_x_span():
+    """The body/reserve charts are in bu, not counts, so the axis must say so."""
+    surf = _surface()
+    charts.histogram(surf, pygame.Rect(0, 0, 300, 130), _FONTS, _cache(),
+                     title="body mass distribution",
+                     y_unit="organisms",
+                     counts=np.array([1.0, 3.0, 0.0, 2.0]),
+                     bin_width=1.5, x_span=(0.0, 6.0))
+    assert _non_blank(surf)
+
+
+def test_live_distribution_blocks_are_declared_and_drawn():
+    """The two distribution charts must exist in the grid and render."""
+    from evolve.viz.analytics import _blocks
+
+    eng = Engine(small_config(organisms=30))
+    eng.run(5)
+    hist = AnalyticsHistory(interval=1)
+    hist.maybe_sample(eng, force=True)
+    blocks = {b["key"]: b for b in _blocks(hist.arrays(), eng)}
+    for key in ("body_size", "energy"):
+        assert key in blocks
+        assert blocks[key]["kind"] == "live_hist"
+        assert blocks[key]["unit"] == "organisms"
+
+    surf = _surface(1400, 900)
+    cache = _cache()
+    rect = pygame.Rect(0, 0, 1400, 900)
+    draw_analytics(surf, rect, _FONTS, cache, hist, eng, 0)
+    assert _non_blank(surf)

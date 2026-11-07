@@ -30,6 +30,18 @@ from .palette import ACCENT, BAD, GOOD, TEXT, TEXT_DIM, TEXT_FAINT, WARN
 SAMPLE_INTERVAL = 20
 HISTORY_CAP = 600
 
+#: Live population histograms (IMPROVE §6.4 items 3 and 4). A *distribution*
+#: is a snapshot of the living population, not a history series: storing a
+#: histogram per sample would cost ~2,400 floats per sample for no reader
+#: benefit, so these are computed from the current engine state and cached per
+#: tick. Body mass and reserve are both in bu but span very different ranges
+#: (a body is roughly 0.5–5 bu; a reserve can reach E_max ≈ 10·body^0.9), so
+#: they get explicit separate ranges rather than a shared axis.
+BODY_HIST_RANGE = (0.0, 6.0)
+BODY_HIST_BINS = 24
+ENERGY_HIST_RANGE = (0.0, 20.0)
+ENERGY_HIST_BINS = 24
+
 CHART_H = 132
 CHART_GAP = 10
 HEADER_H = 46
@@ -162,6 +174,27 @@ class AnalyticsHistory:
                                  dtype=np.float64) for name in FIELDS}
 
 
+def _live_histogram(engine, attr: str, span: tuple[float, float],
+                    bins: int) -> np.ndarray:
+    """Histogram of one per-organism quantity over the *living* population.
+
+    This is a snapshot of who is alive now, so it is computed from engine state
+    at draw time rather than stored per sample: a histogram per sample would
+    cost thousands of floats in a ring buffer for a chart that only ever shows
+    the current population. The bins are fixed by the caller so two frames are
+    comparable even as the population changes.
+    """
+    pop = engine.population
+    idx = np.flatnonzero(pop.alive)
+    low, high = span
+    if idx.size == 0:
+        return np.zeros(bins, dtype=np.float64)
+    values = getattr(pop, attr)[idx]
+    counts, _ = np.histogram(np.clip(values, low, high), bins=bins,
+                             range=(low, high))
+    return counts.astype(np.float64)
+
+
 def _blocks(data: dict[str, np.ndarray], engine
             ) -> list[dict]:
     """Chart descriptors ``{kind, key, title, unit}``, in reading order.
@@ -203,11 +236,29 @@ def _blocks(data: dict[str, np.ndarray], engine
          "unit": "deaths"},
         {"kind": "hist", "key": "age_at_death", "title": "age at death",
          "unit": "deaths"},
+        # IMPROVE §6.4 items 3 and 4: the *distribution* of body mass and of
+        # reserve across the living population, not a mean over time. Both are
+        # in bu but over different spans, so each declares its own range.
+        {"kind": "live_hist", "key": "body_size",
+         "title": "body mass distribution (living)", "unit": "organisms"},
+        {"kind": "live_hist", "key": "energy",
+         "title": "reserve distribution (living)", "unit": "organisms"},
         {"kind": "line", "key": "cv", "title": "population variability",
          "unit": "coefficient of variation"},
         {"kind": "line", "key": "behaviour", "title": "behaviour totals (living)",
          "unit": "events"},
     ]
+
+
+#: ``(population attribute, axis span, bin count, x label, caption)`` for the
+#: live distribution charts. Kept beside the block list so the descriptor and
+#: the data it draws cannot drift apart.
+LIVE_HISTOGRAMS: dict[str, tuple[str, tuple[float, float], int, str, str]] = {
+    "body_size": ("body", BODY_HIST_RANGE, BODY_HIST_BINS, "bu",
+                  "living organisms only; clipped to the stated span"),
+    "energy": ("energy", ENERGY_HIST_RANGE, ENERGY_HIST_BINS, "bu",
+               "living organisms only; reserves above the span are clipped"),
+}
 
 
 def _draw_block(screen, rect, fonts, cache, block: dict,
@@ -233,6 +284,16 @@ def _draw_block(screen, rect, fonts, cache, block: dict,
                                  np.zeros(0, dtype=np.int64)),
                   bin_width=float(DEATH_AGE_BIN),
                   caption=f"age in ticks, {DEATH_AGE_BIN}-tick bins")
+        return
+    if kind == "live_hist":
+        attr, span, bins, x_label, caption = LIVE_HISTOGRAMS[block["key"]]
+        counts = _live_histogram(engine, attr, span, bins)
+        edge = (span[1] - span[0]) / bins
+        histogram(screen, rect, fonts, cache, title=title, y_unit=unit,
+                  counts=counts, bin_width=edge,
+                  caption=f"{caption} · x axis in {x_label}",
+                  empty_text="no living organisms to measure",
+                  x_span=span)
         return
     x = ("tick 0", f"tick {int(d['tick'][-1]) if d['tick'].size else 0:,}")
     key = block["key"]

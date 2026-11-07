@@ -260,8 +260,16 @@ def histogram(screen: pygame.Surface, rect: pygame.Rect,
               title: str, y_unit: str,
               counts: np.ndarray, bin_width: float,
               colour: tuple[int, int, int] = ACCENT,
-              caption: str | None = None) -> None:
-    """Vertical bar histogram; x is a labelled continuous axis, not categories."""
+              caption: str | None = None,
+              empty_text: str = "no deaths recorded yet",
+              x_span: tuple[float, float] | None = None) -> None:
+    """Vertical bar histogram; x is a labelled continuous axis, not categories.
+
+    ``x_span`` sets the axis endpoints directly (used by the live body/reserve
+    distributions, whose bins are fixed in data units). When omitted the span is
+    inferred from ``counts.size * bin_width``, which is what the age-at-death
+    histogram needs.
+    """
     small = fonts["small"]
     counts = np.asarray(counts, dtype=np.float64)
     total = float(np.nansum(counts)) if counts.size else 0.0
@@ -269,14 +277,17 @@ def histogram(screen: pygame.Surface, rect: pygame.Rect,
         screen.blit(cache.render(small, title, TEXT), (rect.x + 2, rect.y + 1))
         unit = cache.render(small, y_unit, TEXT_FAINT)
         screen.blit(unit, (rect.right - unit.get_width() - 2, rect.y + 1))
-        screen.blit(cache.render(small, "no deaths recorded yet", TEXT_FAINT),
+        screen.blit(cache.render(small, empty_text, TEXT_FAINT),
                     (rect.x + 4, rect.y + 4 + small.get_linesize()))
         return
     frame = _Frame(rect, small, caption is not None)
     _draw_header(screen, frame, small, cache, title, y_unit)
     vmax = float(np.nanmax(counts))
-    _draw_axes(screen, frame, small, cache, 0.0, max(1.0, vmax),
-               ("0", f"{counts.size * bin_width:.0f}"))
+    if x_span is not None:
+        x_labels = (_fmt(float(x_span[0])), _fmt(float(x_span[1])))
+    else:
+        x_labels = ("0", f"{counts.size * bin_width:.0f}")
+    _draw_axes(screen, frame, small, cache, 0.0, max(1.0, vmax), x_labels)
     box = frame.box
     bw = box.width / max(1, counts.size)
     for i, value in enumerate(counts):

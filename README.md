@@ -41,8 +41,10 @@ panel on the right, a control strip along the bottom.
   gene, not an observed behaviour. The panel also reports roles **measured
   from lifetime intake**, which can differ from the gene.
 * **Background layers.** `v` cycles climate → moisture → soil → temperature →
-  terrain. The badge in the top-left corner names the layer and spells out what
-  its colours mean (for example "moisture — brown is dry, blue is wet").
+  terrain → plant biomass → animal counts → threat pheromone → mean vision
+  range. The badge in the top-left corner names the layer and spells out what
+  its colours mean (for example "moisture — brown is dry, blue is wet"), and
+  the single-quantity overlays also print their numeric span and unit.
 * **First launch opens a guide.** `viz` starts with a modal five-minute guide
   (also on `h`) that explains what the dots, colours and numbers mean. While it
   is open only close (`h`/`esc`) and scroll act, so reading it cannot pause,
@@ -87,9 +89,11 @@ panel on the right, a control strip along the bottom.
 | arrows | pan · `+` / `-` zoom · `home` fit world |
 | click | select · `x` clear · `f` follow |
 | `v` | cycle environment layer |
+| `p` | perception overlay for the selected animal |
+| `a` | analytics charts view |
 | `i` | show/hide the side panel |
 | `h` | full help overlay (modal; `esc` closes it) |
-| mouse wheel / `pgup` `pgdn` | scroll the panel or the help overlay |
+| mouse wheel / `pgup` `pgdn` | scroll the panel, charts or help overlay |
 | `r` | restart from the seed |
 | `q` / `esc` | quit |
 

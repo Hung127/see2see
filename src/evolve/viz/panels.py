@@ -900,8 +900,10 @@ HELP_BLOCKS = (
         "dot is an animal. The shaded background is one environmental layer, and "
         "the top-left badge names it and explains its colours; V cycles through "
         "climate, moisture, soil, temperature, terrain, plant biomass, animal "
-        "counts and pheromone. The badge prints the numeric range of whatever "
-        "layer is showing.",
+        "counts, threat pheromone and mean vision range. The badge prints the "
+        "numeric range of whatever layer is showing. On the vision layer a dark "
+        "cell means no animals live there to measure — not that they are "
+        "short-sighted.",
         "Mass is conserved: plants and animals are built from soil nutrients, and "
         "everything that dies decays back into soil. The side panel lists the "
         "pools so you can watch matter move between them.",
