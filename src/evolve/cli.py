@@ -122,6 +122,24 @@ def _parser() -> argparse.ArgumentParser:
     ctl.add_argument("--only", nargs="+", default=None,
                      help="controllers to run (default: all)")
     ctl.set_defaults(func=_cmd_controllers)
+
+    sens = sub.add_parser(
+        "sensitivity", help="one-factor-at-a-time parameter sensitivity sweeps")
+    sens.add_argument("--out", required=True, help="output directory")
+    sens.add_argument("--sweep", default="all",
+                      help=f"which sweep, or 'all' (default). Known: "
+                           f"bite, eta_p, soil_diffusion, sigma_trait, "
+                           f"maturity_age, decay")
+    sens.add_argument("--seeds", type=int, nargs="+", default=[11, 12, 13],
+                      help="paired seeds per parameter value")
+    sens.add_argument("--ticks", type=int, default=250,
+                      help="horizon after scaling (default 250)")
+    sens.add_argument("--scale", type=float, default=None,
+                      help="area/time multiplier (default: the experiment "
+                           "default)")
+    sens.add_argument("--config", default=None,
+                      help="base configuration (default: configs/default.yaml)")
+    sens.set_defaults(func=_cmd_sensitivity)
     return p
 
 
@@ -313,6 +331,25 @@ def _cmd_controllers(args) -> int:
               f"{r['final_population']:4d}, births {r['births']:4d}, "
               f"deaths {r['deaths']:4d}"
               f"{' [EXTINCT]' if r['extinct'] else ''}")
+    return 0
+
+
+def _cmd_sensitivity(args) -> int:
+    from .experiments import DEFAULT_SCALE
+    from .sensitivity import run_sweep
+
+    scale = args.scale if args.scale is not None else DEFAULT_SCALE
+    report = run_sweep(args.out, sweep=args.sweep, seeds=args.seeds,
+                       ticks=args.ticks, scale=scale, config_path=args.config)
+    print(f"sensitivity: {len(report['rows'])} runs, {report['ticks']} ticks, "
+          f"scale {scale}, seeds {report['seeds']} -> {args.out}")
+    for key, block in report["sweeps"].items():
+        print(f"  {key} ({block['parameter']}), baseline "
+              f"{block['baseline']}:")
+        for row in block["table"]:
+            print(f"    {row['value']:>8}: final population "
+                  f"{row['final_population_mean']:.1f} ± "
+                  f"{row['final_population_sd']:.1f}")
     return 0
 
 
